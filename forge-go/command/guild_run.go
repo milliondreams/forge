@@ -122,8 +122,18 @@ func runGuildREPL(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	// Wait a moment for agents to fully start
-	time.Sleep(2 * time.Second)
+	// Wait for the guild manager to finish initializing the guild before we
+	// create the UserProxyAgent or send any messages. Until the guild is
+	// initialized the manager rejects a UserProxyAgent creation request with
+	// "Guild is not initialized", and agent-process liveness is not a reliable
+	// signal (it is set at spawn, before initialization). Mirror rustic-ui and
+	// wait for the guild to report ready.
+	if !guildQuiet {
+		fmt.Println("⏳ Waiting for guild to initialize...")
+	}
+	if err := runtime.WaitForGuildReady(guildID, 2*time.Minute); err != nil {
+		fmt.Printf("⚠️  Warning: guild did not report ready: %v (continuing anyway)\n", err)
+	}
 
 	// Determine the topic to send user messages to.
 	userMessageTopic, useWrappedMessages := selectUserMessageTopic(spec)

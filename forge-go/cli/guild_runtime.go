@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"github.com/rustic-ai/forge/forge-go/guild"
+	"github.com/rustic-ai/forge/forge-go/guild/store"
 	"github.com/rustic-ai/forge/forge-go/messaging"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"gopkg.in/yaml.v3"
@@ -665,6 +666,51 @@ func (r *GuildRuntime) waitForGuildRunning(guildID string, timeout time.Duration
 		time.Sleep(1 * time.Second)
 	}
 	return fmt.Errorf("timeout waiting for guild to be running")
+}
+
+// guildStatus returns the guild's store-level status ("not_launched",
+// "starting", "running", …) via the server's HTTP API. Unlike GetAgentStatuses
+// (which reports process liveness, set the moment an agent process spawns), this
+// reflects whether the manager has actually initialized the guild.
+func (r *GuildRuntime) guildStatus(guildID string) (string, error) {
+	url := fmt.Sprintf("%s/api/guilds/%s", r.serverBase, guildID)
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Status, nil
+}
+
+// WaitForGuildReady blocks until the guild manager has finished initializing the
+// guild, i.e. its store-level status reaches "running". The manager rejects a
+// UserProxyAgent creation request with "Guild is not initialized" until this
+// point, and agent-process liveness ("running" in the status store) is set at
+// spawn time — well before the guild is initialized — so it cannot be used as
+// the gate. This mirrors rustic-ui, which polls a guild health check and only
+// creates the UserProxyAgent / enables messaging once the guild reports healthy.
+// Returns nil once ready, or an error on timeout.
+func (r *GuildRuntime) WaitForGuildReady(guildID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		status, err := r.guildStatus(guildID)
+		if err == nil && status == string(store.GuildStatusRunning) {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for guild %s to become ready", guildID)
 }
 
 func (r *GuildRuntime) createBlueprint(spec *protocol.GuildSpec) (map[string]any, error) {
