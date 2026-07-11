@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,12 +16,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"github.com/rustic-ai/forge/forge-go/guild"
 	"github.com/rustic-ai/forge/forge-go/messaging"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"gopkg.in/yaml.v3"
 )
+
+// agentStatusKVBucket is the JetStream KV bucket the supervisor writes agent
+// runtime status into when the server runs with the NATS backend. Mirrors the
+// constant in the supervisor package (kept in sync manually to avoid importing
+// the supervisor package from the CLI).
+const agentStatusKVBucket = "agent-status"
 
 // RuntimeConfig holds configuration for the guild runtime
 type RuntimeConfig struct {
@@ -46,6 +54,9 @@ type GuildRuntime struct {
 	rusticBase  string
 	redisAddr   string
 	redisClient *redis.Client
+	natsURL     string
+	natsConn    *nats.Conn
+	msgBackend  messaging.Backend // Cached messaging backend (Redis or NATS)
 	tempDir     string
 	dbPath      string
 	dataDir     string
@@ -116,11 +127,21 @@ func (r *GuildRuntime) Start() error {
 		return fmt.Errorf("failed to reserve listen address: %w", err)
 	}
 
-	embeddedRedisAddr, err := reserveLocalAddr()
-	if err != nil {
-		return fmt.Errorf("failed to reserve redis address: %w", err)
+	backend := strings.ToLower(strings.TrimSpace(r.config.Backend))
+	if backend == "" {
+		backend = "nats"
 	}
-	r.redisAddr = embeddedRedisAddr
+
+	// Reserve an address for the embedded message broker the server will boot
+	// (Redis or NATS, mutually exclusive). The CLI later connects its own client
+	// to whichever broker was chosen.
+	brokerAddr, err := reserveLocalAddr()
+	if err != nil {
+		return fmt.Errorf("failed to reserve broker address: %w", err)
+	}
+	if backend != "nats" {
+		r.redisAddr = brokerAddr
+	}
 
 	// Find forge binary
 	binPath, err := exec.LookPath("forge")
@@ -140,7 +161,7 @@ func (r *GuildRuntime) Start() error {
 		"server",
 		"--listen", listenAddr,
 		"--db", "sqlite:///" + r.dbPath,
-		"--embedded-redis-addr", embeddedRedisAddr,
+		"--backend", backend,
 		"--data-dir", r.dataDir,
 		"--dependency-config", r.config.DependencyConfig,
 		"--with-client",
@@ -149,8 +170,21 @@ func (r *GuildRuntime) Start() error {
 		"--client-default-supervisor", r.config.SupervisorType,
 	}
 
-	if r.config.NATSUrl != "" {
-		args = append(args, "--nats", r.config.NATSUrl)
+	if backend == "nats" {
+		if r.config.NATSUrl != "" {
+			// Caller provided an external NATS server; point forge at it and
+			// connect the CLI there too.
+			r.natsURL = r.config.NATSUrl
+			args = append(args, "--nats", r.config.NATSUrl)
+		} else {
+			// Boot the server's embedded NATS at the address we reserved so the
+			// CLI can connect its own client to it. Matches how rustic-ui
+			// launches forge (--backend nats with an embedded server).
+			r.natsURL = "nats://" + brokerAddr
+			args = append(args, "--embedded-nats-addr", brokerAddr)
+		}
+	} else {
+		args = append(args, "--embedded-redis-addr", brokerAddr)
 	}
 
 	// Create server command
@@ -198,8 +232,16 @@ func (r *GuildRuntime) Start() error {
 		"FORGE_QUOTA_MODE=local",
 		"PYTHONUNBUFFERED=1",
 	)
-	if r.config.NATSUrl != "" {
+	if backend == "nats" {
+		// Python agents need the NATS messaging plugin when the data plane is NATS.
 		env = append(env, "FORGE_EXTRA_DEPS=rusticai-nats")
+		// Match rustic-ui's NATS message TTL (30 days) so local CLI runs behave
+		// the same as the desktop app.
+		natsTTL := os.Getenv("RUSTIC_AI_NATS_MSG_TTL")
+		if natsTTL == "" {
+			natsTTL = "2592000"
+		}
+		env = append(env, "RUSTIC_AI_NATS_MSG_TTL="+natsTTL)
 	}
 
 	cmd.Env = env
@@ -219,10 +261,23 @@ func (r *GuildRuntime) Start() error {
 		return fmt.Errorf("server did not become ready: %w", err)
 	}
 
-	// Create Redis client
-	r.redisClient = redis.NewClient(&redis.Options{Addr: embeddedRedisAddr})
+	// Connect the CLI's own client to whichever broker the server booted.
+	switch backend {
+	case "nats":
+		nc, err := nats.Connect(r.natsURL,
+			nats.RetryOnFailedConnect(true),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(200*time.Millisecond))
+		if err != nil {
+			r.kill()
+			return fmt.Errorf("failed to connect to NATS at %s: %w", r.natsURL, err)
+		}
+		r.natsConn = nc
+	default:
+		r.redisClient = redis.NewClient(&redis.Options{Addr: r.redisAddr})
+	}
 
-	slog.Info("Guild runtime started", "listen_addr", listenAddr, "backend", r.config.Backend)
+	slog.Info("Guild runtime started", "listen_addr", listenAddr, "backend", backend)
 
 	// Seed agent registry into catalog
 	if err := r.seedAgentRegistry(); err != nil {
@@ -393,6 +448,15 @@ func (r *GuildRuntime) GetAgentName(agentID string) string {
 
 // GetAgentStatuses gets the status of all agents in a guild
 func (r *GuildRuntime) GetAgentStatuses(guildID string) (map[string]AgentStatus, error) {
+	if r.natsConn != nil {
+		return r.getAgentStatusesNATS(guildID)
+	}
+	return r.getAgentStatusesRedis(guildID)
+}
+
+// getAgentStatusesRedis reads agent runtime status from the Redis keys the
+// supervisor writes (forge:agent:status:<guildID>:<agentID>).
+func (r *GuildRuntime) getAgentStatusesRedis(guildID string) (map[string]AgentStatus, error) {
 	const statusPrefix = "forge:agent:status:"
 	pattern := fmt.Sprintf("%s%s:*", statusPrefix, guildID)
 
@@ -427,6 +491,77 @@ func (r *GuildRuntime) GetAgentStatuses(guildID string) (map[string]AgentStatus,
 	return statuses, nil
 }
 
+// getAgentStatusesNATS reads agent runtime status from the JetStream KV bucket
+// the supervisor writes under the NATS backend. Keys are "<guildID>.<agentID>"
+// with each component sanitized; there is no wildcard GET, so we list all keys
+// in the bucket and filter by the guild prefix.
+func (r *GuildRuntime) getAgentStatusesNATS(guildID string) (map[string]AgentStatus, error) {
+	js, err := r.natsConn.JetStream()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
+	}
+
+	kv, err := js.KeyValue(agentStatusKVBucket)
+	if err != nil {
+		// The bucket is created lazily by the server when the first agent writes
+		// its status; until then there are simply no statuses to report.
+		if errors.Is(err, nats.ErrBucketNotFound) {
+			return map[string]AgentStatus{}, nil
+		}
+		return nil, fmt.Errorf("failed to open agent-status KV bucket: %w", err)
+	}
+
+	keys, err := kv.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return map[string]AgentStatus{}, nil
+		}
+		return nil, fmt.Errorf("failed to list agent statuses: %w", err)
+	}
+
+	prefix := kvSanitize(guildID) + "."
+	statuses := make(map[string]AgentStatus)
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+
+		entry, err := kv.Get(key)
+		if err != nil {
+			continue
+		}
+
+		var status struct {
+			State string `json:"state"`
+			PID   int    `json:"pid"`
+		}
+		if err := json.Unmarshal(entry.Value(), &status); err != nil {
+			continue
+		}
+
+		agentID := strings.TrimPrefix(key, prefix)
+		statuses[agentID] = AgentStatus{
+			AgentID: agentID,
+			State:   status.State,
+			PID:     status.PID,
+		}
+	}
+
+	return statuses, nil
+}
+
+// kvSanitize mirrors the supervisor's NATS KV key sanitization: NATS KV keys
+// allow only alphanumerics, '-', '_', and '.', so any other rune is replaced
+// with '_'. Must stay in sync with supervisor.kvSanitize.
+func kvSanitize(name string) string {
+	return strings.Map(func(rn rune) rune {
+		if (rn >= 'a' && rn <= 'z') || (rn >= 'A' && rn <= 'Z') || (rn >= '0' && rn <= '9') || rn == '-' || rn == '_' || rn == '.' {
+			return rn
+		}
+		return '_'
+	}, name)
+}
+
 // PublishMessage publishes a message to a topic
 func (r *GuildRuntime) PublishMessage(namespace, topic string, msg *protocol.Message) error {
 	backend, err := r.getMessagingBackend()
@@ -437,11 +572,25 @@ func (r *GuildRuntime) PublishMessage(namespace, topic string, msg *protocol.Mes
 	return backend.PublishMessage(r.ctx, namespace, topic, msg)
 }
 
-// getMessagingBackend returns the messaging backend for the runtime
+// getMessagingBackend returns the messaging backend for the runtime, matching
+// the transport the server was launched with (NATS or Redis). The backend is
+// built once and cached so publishers and subscribers share it.
 func (r *GuildRuntime) getMessagingBackend() (messaging.Backend, error) {
-	// For now, we always use the embedded Redis backend
-	// The server internally handles NATS if configured
-	return messaging.NewRedisBackend(r.redisClient), nil
+	if r.msgBackend != nil {
+		return r.msgBackend, nil
+	}
+
+	if r.natsConn != nil {
+		backend, err := messaging.NewNATSBackend(r.natsConn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create NATS messaging backend: %w", err)
+		}
+		r.msgBackend = backend
+		return r.msgBackend, nil
+	}
+
+	r.msgBackend = messaging.NewRedisBackend(r.redisClient)
+	return r.msgBackend, nil
 }
 
 // Shutdown gracefully shuts down the runtime
@@ -450,8 +599,16 @@ func (r *GuildRuntime) Shutdown() error {
 
 	r.cancel()
 
+	if r.msgBackend != nil {
+		_ = r.msgBackend.Close()
+	}
+
 	if r.redisClient != nil {
 		r.redisClient.Close()
+	}
+
+	if r.natsConn != nil {
+		r.natsConn.Close()
 	}
 
 	if r.serverCmd != nil && r.serverCmd.Process != nil {
