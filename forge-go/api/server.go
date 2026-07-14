@@ -19,6 +19,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/modelfit"
 	"github.com/rustic-ai/forge/forge-go/oauth"
 	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/secrets"
 	"github.com/rustic-ai/forge/forge-go/supervisor"
 )
 
@@ -36,6 +37,7 @@ type Server struct {
 	modelFit         *modelFitService
 	oauthManager     *oauth.Manager
 	oauthRoutePrefix string
+	secretManager    *secrets.Manager
 	listenAddr       string
 	server           *http.Server
 }
@@ -91,6 +93,27 @@ func (s *Server) WithOAuth() *Server {
 // OAuthManager returns the oauth.Manager initialised by WithOAuth, or nil if OAuth is not configured.
 func (s *Server) OAuthManager() *oauth.Manager {
 	return s.oauthManager
+}
+
+// WithSecrets initialises org-scoped secret management. The store backend is
+// selected from FORGE_SECRET_STORE ("memory" (default) or "keychain"), mirroring
+// the OAuth token store. With the keychain backend, secrets are stored under
+// "secret:orgID|name" and resolve through the keychain SecretProvider directly —
+// no delegation is needed since the stored value is the secret itself.
+func (s *Server) WithSecrets() *Server {
+	store, err := secrets.NewSecretStore(os.Getenv("FORGE_SECRET_STORE"))
+	if err != nil {
+		fmt.Printf("WARN: %v; falling back to in-memory secret store\n", err)
+		store, _ = secrets.NewSecretStore("memory")
+	}
+	s.secretManager = secrets.NewManager(store)
+	return s
+}
+
+// SecretManager returns the secrets.Manager initialised by WithSecrets, or nil
+// if secret management is not configured.
+func (s *Server) SecretManager() *secrets.Manager {
+	return s.secretManager
 }
 
 func (s *Server) WithObservability(mode, sqliteDBPath string) *Server {
@@ -193,6 +216,9 @@ func (s *Server) buildRouter() *gin.Engine {
 		s.registerRusticUIRoutes(router, gemGen)
 		if s.oauthManager != nil {
 			s.registerOAuthRoutes(router, "/rustic")
+		}
+		if s.secretManager != nil {
+			s.registerSecretRoutes(router, "/rustic")
 		}
 		router.GET("/rustic/modelfit/local-models", wrapHTTP(s.handleListLocalModelFits()))
 		router.GET("/rustic/modelfit/capabilities", wrapHTTP(s.handleGetModelFitCapabilities()))

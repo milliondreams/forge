@@ -43,9 +43,6 @@ func (s *Server) registerOAuthRoutes(router *gin.Engine, prefix string) {
 	// Single, provider- and org-agnostic callback for every provider: the flow is
 	// identified entirely by the opaque state inside ExchangeCode.
 	router.GET(prefix+"/oauth/callback", wrapHTTP(s.handleOAuthCallback()))
-	// Backward-compat alias for providers registered with the older org-scoped
-	// callback URL. Shares the same state-driven handler.
-	router.GET(prefix+"/oauth/organizations/:org_id/providers/:provider_id/callback", wrapHTTPWithPathValues(s.handleOAuthCallback(), "org_id", "provider_id"))
 	router.GET(prefix+"/oauth/organizations/:org_id/providers/:provider_id/status", wrapHTTPWithPathValues(s.handleOAuthStatus(), "org_id", "provider_id"))
 	router.DELETE(prefix+"/oauth/organizations/:org_id/providers/:provider_id", wrapHTTPWithPathValues(s.handleOAuthDisconnect(), "org_id", "provider_id"))
 }
