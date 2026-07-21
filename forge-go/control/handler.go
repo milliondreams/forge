@@ -299,6 +299,26 @@ func (h *ControlQueueHandler) handleSpawn(ctx context.Context, req *protocol.Spa
 			},
 		}
 	}
+	// Specs recovered from the payload can also carry a nil `agents`; Normalize turns it
+	// into an empty list (among other defaulting) so core validation accepts it.
+	guildSpec.Normalize()
+
+	// AgentSpec.ForgeExtraDeps is a Forge extension that rustic-ai core's AgentSpec does not
+	// model, so it is stripped when the Python guild manager re-serializes the spec to build
+	// this spawn request. The guild store is the authoritative copy; re-attach from there.
+	if len(req.AgentSpec.ForgeExtraDeps) == 0 {
+		for i := range guildSpec.Agents {
+			if guildSpec.Agents[i].ID != req.AgentSpec.ID {
+				continue
+			}
+			if deps := guildSpec.Agents[i].ForgeExtraDeps; len(deps) > 0 {
+				req.AgentSpec.ForgeExtraDeps = deps
+				slog.Debug("handleSpawn: restored forge_extra_deps from guild spec",
+					"agent_id", req.AgentSpec.ID, "guild", req.GuildID, "deps", deps)
+			}
+			break
+		}
+	}
 
 	if req.MessagingConfig != nil {
 		if guildSpec.Properties == nil {
