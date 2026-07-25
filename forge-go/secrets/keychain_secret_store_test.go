@@ -48,6 +48,23 @@ func TestKeychainSecretStore_CRUDAndList(t *testing.T) {
 	}
 }
 
+func TestKeychainSecretStore_ListEmptyIsNonNil(t *testing.T) {
+	s := newTestKeychainStore(t)
+
+	names, err := s.List("org-with-no-secrets")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	// A nil slice marshals to JSON null, which violates the contract's required
+	// "secrets" array.
+	if names == nil {
+		t.Fatal("expected empty non-nil slice, got nil")
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected no names, got %+v", names)
+	}
+}
+
 func TestKeychainSecretStore_OrgIsolation(t *testing.T) {
 	s := newTestKeychainStore(t)
 

@@ -1,14 +1,14 @@
 {
   "name": "@rustic-ai/api-client",
-  "version": "0.0.9",
-  "description": "TypeScript client for the Rustic AI Forge HTTP API, generated from its OpenAPI specification.",
-  "license": "Apache-2.0",
+  "version": "0.4.3",
+  "description": "TypeScript client for the Rustic AI HTTP API, generated from its OpenAPI specification.",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rustic-ai/forge.git",
     "directory": "clients/typescript"
   },
-  "homepage": "https://github.com/rustic-ai/forge/tree/main/clients/typescript",
+  "homepage": "https://rustic-ai.github.io/rustic-ai/api/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

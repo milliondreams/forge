@@ -87,6 +87,11 @@ func (s *Server) handleListSecrets() http.HandlerFunc {
 			ReplyError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if names == nil {
+			// The contract declares "secrets" as a required array: an org with no
+			// secrets must serialize as [], never null.
+			names = []string{}
+		}
 		ReplyJSON(w, http.StatusOK, map[string]interface{}{"secrets": names})
 	}
 }

@@ -36,8 +36,13 @@ func (s *KeychainSecretStore) Exists(orgID, name string) bool {
 }
 
 func (s *KeychainSecretStore) List(orgID string) ([]string, error) {
-	var filtered []string
 	availableKeys, err := keyring.ListUsers(s.service)
+	if err != nil {
+		return nil, err
+	}
+	// Non-nil so an org with no secrets marshals as [] rather than null; the
+	// contract declares "secrets" as a required array.
+	filtered := make([]string, 0)
 	// using empty string for name since we want to list all secrets saved for the org
 	prefix := SecretStoreKey(orgID, "")
 	for _, key := range availableKeys {
@@ -48,5 +53,5 @@ func (s *KeychainSecretStore) List(orgID string) ([]string, error) {
 		}
 	}
 	sort.Strings(filtered)
-	return filtered, err
+	return filtered, nil
 }
