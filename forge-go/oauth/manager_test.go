@@ -153,14 +153,20 @@ func TestDisconnect_KeepsGlobalDCRClient(t *testing.T) {
 	}
 }
 
-func TestLoadProvidersConfig_DCRResourceURLPairing(t *testing.T) {
+func TestLoadProvidersConfig_RejectsInvalidResourceConfig(t *testing.T) {
 	cases := map[string]string{
+		// DCR discovers its endpoints from the resource, so it needs one.
 		"dcr without resource_url": `providers:
   broken:
     use_dcrp: true`,
-		"resource_url without dcr": `providers:
+		// resource_url is sent as the RFC 8707 resource indicator, which must be
+		// an absolute URI with no fragment.
+		"relative resource_url": `providers:
   broken:
-    resource_url: https://mcp.example.com/mcp`,
+    resource_url: /mcp`,
+		"resource_url with fragment": `providers:
+  broken:
+    resource_url: https://mcp.example.com/mcp#frag`,
 	}
 	for name, yaml := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -172,6 +178,32 @@ func TestLoadProvidersConfig_DCRResourceURLPairing(t *testing.T) {
 				t.Errorf("expected validation error for %q, got nil", name)
 			}
 		})
+	}
+}
+
+// A static provider may declare resource_url purely to have the RFC 8707
+// resource indicator sent; it is not DCR-only.
+func TestLoadProvidersConfig_ResourceURLWithoutDCR(t *testing.T) {
+	yaml := `providers:
+  api:
+    auth_url: https://example.com/oauth/authorize
+    token_url: https://example.com/oauth/token
+    resource_url: https://api.example.com`
+
+	path := t.TempDir() + "/providers.yaml"
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadProvidersConfig(path)
+	if err != nil {
+		t.Fatalf("LoadProvidersConfig failed: %v", err)
+	}
+	p := cfg.Providers["api"]
+	if p.ResourceURL != "https://api.example.com" {
+		t.Errorf("resource_url = %q", p.ResourceURL)
+	}
+	if p.UseDCRP {
+		t.Error("expected use_dcrp to stay false")
 	}
 }
 

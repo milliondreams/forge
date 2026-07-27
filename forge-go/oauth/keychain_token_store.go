@@ -22,6 +22,9 @@ type storedEntry struct {
 	TokenURL     string    `json:"token_url"`
 	AuthStyle    int       `json:"auth_style"`
 	Scopes       []string  `json:"scopes"`
+	// Resource is the RFC 8707 resource indicator, needed to refresh the token
+	// with the same audience. Absent in entries written before it was supported.
+	Resource string `json:"resource,omitempty"`
 }
 
 func toStoredEntry(e *tokenEntry) *storedEntry {
@@ -36,6 +39,7 @@ func toStoredEntry(e *tokenEntry) *storedEntry {
 		TokenURL:     e.endpoint.TokenURL,
 		AuthStyle:    int(e.endpoint.AuthStyle),
 		Scopes:       e.scopes,
+		Resource:     e.resource,
 	}
 }
 
@@ -54,7 +58,8 @@ func fromStoredEntry(s *storedEntry) *tokenEntry {
 			TokenURL:  s.TokenURL,
 			AuthStyle: oauth2.AuthStyle(s.AuthStyle),
 		},
-		scopes: s.Scopes,
+		scopes:   s.Scopes,
+		resource: s.Resource,
 	}
 }
 

@@ -25,7 +25,7 @@ import (
 // (openid/profile/email only) and differ from the OAuth API endpoints used here
 // (chat:write, channels:read, ...). Discovering them would resolve the wrong,
 // narrower surface. Providers not listed here must set auth_url/token_url
-// explicitly, or use resource_url for RFC 9728/8414 auto-discovery.
+// explicitly, or use use_dcrp for RFC 9728/8414 auto-discovery.
 var builtinEndpoints = map[string]oauth2.Endpoint{
 	"github":       endpoints.GitHub,
 	"google":       endpoints.Google,
@@ -47,7 +47,7 @@ func resolveEndpoint(providerID string, cfg ProviderConfig) (oauth2.Endpoint, er
 		return ep, nil
 	}
 	return oauth2.Endpoint{}, fmt.Errorf(
-		"provider %q has no known endpoints; set auth_url and token_url, or resource_url for auto-discovery", providerID,
+		"provider %q has no known endpoints; set auth_url and token_url, or use_dcrp with resource_url for auto-discovery", providerID,
 	)
 }
 
@@ -65,7 +65,10 @@ type pendingFlow struct {
 	redirectURL  string
 	// endpoint is captured at authorize time so the callback exchange uses the
 	// same (possibly discovered) endpoints without re-resolving.
-	endpoint  oauth2.Endpoint
+	endpoint oauth2.Endpoint
+	// resource is the RFC 8707 resource indicator sent with the authorization
+	// request; the token exchange must repeat it. Empty when unconfigured.
+	resource  string
 	expiresAt time.Time
 }
 
@@ -76,6 +79,9 @@ type tokenEntry struct {
 	clientSecret string
 	endpoint     oauth2.Endpoint
 	scopes       []string
+	// resource is the RFC 8707 resource indicator the token was issued for. It
+	// is repeated on refresh so the new token keeps the same audience.
+	resource string
 }
 
 // ProviderStatus is the public view of a provider's connection state.
@@ -183,8 +189,10 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 	//
 	// Endpoint discovery is the Dynamic Client Registration flow: it relies on
 	// the provider advertising RFC 9728 protected-resource metadata (in practice
-	// an OAuth-protected resource such as a remote MCP server), so resource_url
-	// is only used when UseDCRP is set. Everything else resolves static endpoints.
+	// an OAuth-protected resource such as a remote MCP server), so only UseDCRP
+	// resolves endpoints from resource_url. Everything else is static — but a
+	// static provider may still declare resource_url to have the RFC 8707
+	// `resource` parameter sent (see below).
 	var endpoint oauth2.Endpoint
 	usePKCE := cfg.pkce()
 
@@ -232,6 +240,7 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 		codeVerifier: verifier,
 		redirectURL:  redirectURL,
 		endpoint:     endpoint,
+		resource:     cfg.ResourceURL,
 		expiresAt:    time.Now().Add(10 * time.Minute),
 	}
 	m.mu.Unlock()
@@ -247,6 +256,11 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 	var authOpts []oauth2.AuthCodeOption
 	if usePKCE {
 		authOpts = append(authOpts, oauth2.S256ChallengeOption(verifier))
+	}
+	// RFC 8707: name the protected resource the token is for, so the
+	// authorization server can audience-restrict it. Required by MCP servers.
+	if cfg.ResourceURL != "" {
+		authOpts = append(authOpts, resourceParamOption(cfg.ResourceURL))
 	}
 	return oc.AuthCodeURL(state, authOpts...), state, nil
 }
@@ -327,6 +341,11 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 	if flow.codeVerifier != "" {
 		exchangeOpts = append(exchangeOpts, oauth2.VerifierOption(flow.codeVerifier))
 	}
+	// RFC 8707 requires the resource indicator from the authorization request to
+	// be repeated here; omitting it can yield a token for a different audience.
+	if flow.resource != "" {
+		exchangeOpts = append(exchangeOpts, resourceParamOption(flow.resource))
+	}
 	token, err := oc.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
 		return providerID, fmt.Errorf("exchanging code: %w", err)
@@ -338,6 +357,7 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 		clientSecret: flow.clientSecret,
 		endpoint:     endpoint,
 		scopes:       cfg.Scopes,
+		resource:     flow.resource,
 	})
 }
 
@@ -354,6 +374,14 @@ func (m *Manager) GetAccessToken(ctx context.Context, orgID, providerID string) 
 
 	if entry.token.Valid() && time.Until(entry.token.Expiry) > 60*time.Second {
 		return entry.token.AccessToken, nil
+	}
+
+	// RFC 8707: the refresh must carry the same resource indicator, otherwise the
+	// renewed token can come back scoped to a different audience. x/oauth2 builds
+	// the refresh request itself and exposes no per-request option, so the
+	// parameter is injected by the HTTP client (see resource_param.go).
+	if entry.resource != "" {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, m.resourceParamClient(entry.resource))
 	}
 
 	ts := (&oauth2.Config{

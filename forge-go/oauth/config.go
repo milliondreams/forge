@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 
@@ -21,11 +22,20 @@ type ProviderConfig struct {
 	// Set to false for providers that do not support it.
 	UsePKCE *bool `yaml:"use_pkce" json:"usePkce,omitempty"`
 
-	// ResourceURL is the OAuth2 protected-resource URL (e.g. an MCP server
-	// endpoint) used by the Dynamic Client Registration flow to discover the
-	// auth/token/registration endpoints (RFC 9728 + RFC 8414). It is only used
-	// when UseDCRP is set; traditional providers should configure AuthURL and
-	// TokenURL (or rely on the built-in endpoints) instead.
+	// ResourceURL is the canonical URI of the OAuth2 protected resource this
+	// provider fronts (e.g. an MCP server endpoint).
+	//
+	// Whenever it is set — with or without UseDCRP — it is sent as the RFC 8707
+	// `resource` parameter on the authorization, token-exchange and refresh
+	// requests, asking the authorization server for a token audience-restricted
+	// to that resource. MCP servers require this; static providers whose
+	// authorization server does not understand the parameter should leave
+	// resource_url unset.
+	//
+	// With UseDCRP it is additionally the discovery input: the
+	// auth/token/registration endpoints are read from the metadata it advertises
+	// (RFC 9728 + RFC 8414). Static providers still need AuthURL and TokenURL
+	// (or a built-in endpoint) — resource_url alone discovers nothing for them.
 	ResourceURL string `yaml:"resource_url" json:"resourceUrl,omitempty"`
 	// UseDCRP enables Dynamic Client Registration (RFC 7591): the endpoints are
 	// discovered from ResourceURL and the client_id/client_secret are registered
@@ -42,16 +52,25 @@ func (p ProviderConfig) RequiresClientCredentials() bool {
 }
 
 // Validate reports configuration errors that would otherwise surface only when
-// an auth flow is started. resource_url and use_dcrp go together: DCR relies on
-// the endpoints advertised by the resource, and resource_url is meaningless
-// outside the DCR flow (it is not general endpoint discovery for traditional
-// providers).
+// an auth flow is started: DCR discovers its endpoints from the resource, so it
+// requires resource_url, and resource_url — which is sent as the RFC 8707
+// `resource` parameter — must be a valid resource indicator: an absolute URI
+// with no fragment (RFC 8707, section 2).
 func (p ProviderConfig) Validate(id string) error {
 	if p.UseDCRP && p.ResourceURL == "" {
 		return fmt.Errorf("provider %q: use_dcrp requires resource_url", id)
 	}
-	if p.ResourceURL != "" && !p.UseDCRP {
-		return fmt.Errorf("provider %q: resource_url is only used with use_dcrp", id)
+	if p.ResourceURL != "" {
+		u, err := url.Parse(p.ResourceURL)
+		if err != nil {
+			return fmt.Errorf("provider %q: invalid resource_url %q: %w", id, p.ResourceURL, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("provider %q: resource_url must be an absolute URI, got %q", id, p.ResourceURL)
+		}
+		if u.Fragment != "" {
+			return fmt.Errorf("provider %q: resource_url must not contain a fragment, got %q", id, p.ResourceURL)
+		}
 	}
 	return nil
 }

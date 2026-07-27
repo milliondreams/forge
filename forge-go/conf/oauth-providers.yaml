@@ -13,12 +13,20 @@
 # use_pkce: controls PKCE (S256 code challenge). Defaults to true. Set to
 # false for providers that do not support it.
 #
+# resource_url: the canonical URI of the protected resource behind this
+# provider (e.g. an MCP server endpoint). When set, Forge sends it as the
+# RFC 8707 `resource` parameter on the authorization, token and refresh
+# requests, so the authorization server can issue a token audience-restricted
+# to that resource. Must be an absolute URI with no fragment. Leave it unset
+# for authorization servers that do not understand the parameter — nothing is
+# sent then. It does NOT provide endpoint discovery on its own: a static
+# provider still needs auth_url and token_url (or a built-in endpoint).
+#
 # Dynamic Client Registration (DCR / RFC 7591): for OAuth-protected resources
 # that support it (e.g. remote MCP servers), set use_dcrp: true and provide
-# resource_url. Forge discovers the auth/token/registration endpoints
-# (RFC 9728 + RFC 8414) and registers its own client on demand — no
-# client_id/client_secret needed. resource_url is only used in this mode; it is
-# not a general endpoint-discovery mechanism for traditional OAuth providers.
+# resource_url. Forge then also discovers the auth/token/registration endpoints
+# from it (RFC 9728 + RFC 8414) and registers its own client on demand — no
+# client_id/client_secret needed.
 #
 # Add a new provider by adding an entry under `providers`. Restart Forge after
 # editing this file.
@@ -44,6 +52,8 @@ providers:
 #   auth_url: https://example.com/oauth/authorize
 #   token_url: https://example.com/oauth/token
 #   use_pkce: false
+#   # Optional: ask for a token restricted to this resource (RFC 8707).
+#   resource_url: https://api.example.com
 #
 #   Dynamic Client Registration example (e.g. a remote MCP server):
 #  notion-mcp:
