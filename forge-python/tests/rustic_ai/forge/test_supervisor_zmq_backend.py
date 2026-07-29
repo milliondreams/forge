@@ -2,17 +2,16 @@ import threading
 from typing import Any
 
 import pytest
-from rustic_ai.core.messaging.core.message import AgentTag, Message
-from rustic_ai.core.utils.gemstone_id import GemstoneGenerator
-from rustic_ai.core.utils.priority import Priority
 import zmq
-
+from rustic_ai.core.messaging.core.message import AgentTag, Message
+from rustic_ai.core.utils.gemstone_id import EPOCH, GemstoneID
+from rustic_ai.core.utils.priority import Priority
 from rustic_ai.forge.messaging.supervisor_backend import SupervisorZmqMessagingBackend
 
 
-def make_message(generator: GemstoneGenerator, topic: str, value: str) -> Message:
+def make_message(id_obj: GemstoneID, topic: str, value: str) -> Message:
     return Message(
-        id_obj=generator.get_id(Priority.NORMAL),
+        id_obj=id_obj,
         topics=topic,
         sender=AgentTag(id="sender-1", name="sender"),
         payload={"value": value},
@@ -122,10 +121,14 @@ class FakeSupervisorBridge:
             }
 
         if op == "get_since":
+            cursor_timestamp = GemstoneID.from_int(request["since_id"]).timestamp
             messages = [
                 message.to_json()
-                for message in self.messages_by_topic.get(request["topic"], [])
-                if message.id > request["since_id"]
+                for message in sorted(
+                    self.messages_by_topic.get(request["topic"], []),
+                    key=lambda candidate: candidate.id,
+                )
+                if message.timestamp > cursor_timestamp
             ]
             return {
                 "kind": "response",
@@ -136,11 +139,15 @@ class FakeSupervisorBridge:
             }
 
         if op == "get_next":
-            candidates = [
-                message
-                for message in self.messages_by_topic.get(request["topic"], [])
-                if message.id > request["since_id"]
-            ]
+            cursor_timestamp = GemstoneID.from_int(request["since_id"]).timestamp
+            candidates = sorted(
+                [
+                    message
+                    for message in self.messages_by_topic.get(request["topic"], [])
+                    if message.timestamp > cursor_timestamp
+                ],
+                key=lambda candidate: candidate.id,
+            )
             next_message = candidates[0].to_json() if candidates else None
             return {
                 "kind": "response",
@@ -197,13 +204,21 @@ def test_supervisor_zmq_backend_round_trip_and_delivery(
         retry_enabled=False,
         crash_on_failure=False,
     )
-    generator = GemstoneGenerator(7)
     delivered: list[Message] = []
     delivered_event = threading.Event()
 
     try:
-        message_1 = make_message(generator, "guild-1:alpha", "first")
-        message_2 = make_message(generator, "guild-1:alpha", "second")
+        base_timestamp = EPOCH + 2_000_000
+        message_1 = make_message(
+            GemstoneID(Priority.NORMAL, base_timestamp, 7, 0),
+            "guild-1:alpha",
+            "first",
+        )
+        message_2 = make_message(
+            GemstoneID(Priority.NORMAL, base_timestamp + 1, 7, 0),
+            "guild-1:alpha",
+            "second",
+        )
 
         backend.store_message("guild-1", "guild-1:alpha", message_1)
         backend.store_message("guild-1", "guild-1:alpha", message_2)
@@ -246,3 +261,85 @@ def test_supervisor_zmq_backend_round_trip_and_delivery(
     assert bridge.recorded_ops().count("cleanup") == 1
     assert "subscribe" in bridge.recorded_ops()
     assert "unsubscribe" in bridge.recorded_ops()
+
+
+def test_supervisor_zmq_default_topic_priority_boundary(
+    bridge: FakeSupervisorBridge,
+) -> None:
+    backend = SupervisorZmqMessagingBackend(
+        endpoint=bridge.endpoint,
+        request_timeout_ms=1_000,
+        heartbeat_interval_ms=0,
+        retry_enabled=False,
+        crash_on_failure=False,
+    )
+    base_timestamp = EPOCH + 1_000_000
+    boundary = GemstoneID(Priority.NORMAL, base_timestamp, 1, 0)
+    same_millisecond = GemstoneID(Priority.NORMAL, base_timestamp, 1, 1)
+    later_normal = GemstoneID(Priority.NORMAL, base_timestamp + 1, 1, 0)
+    later_high = GemstoneID(Priority.HIGH, base_timestamp + 2, 1, 0)
+    later_urgent = GemstoneID(Priority.URGENT, base_timestamp + 3, 1, 0)
+
+    assert later_high.to_int() < boundary.to_int()
+    assert later_urgent.to_int() < boundary.to_int()
+
+    def message(label: str, id_obj: GemstoneID) -> Message:
+        return Message(
+            id_obj=id_obj,
+            topics="default_topic",
+            sender=AgentTag(id="sender-1", name="sender"),
+            payload={"label": label},
+            topic_published_to="default_topic",
+        )
+
+    fixtures = [
+        message("boundary", boundary),
+        message("same_millisecond", same_millisecond),
+        message("later_normal", later_normal),
+        message("later_high", later_high),
+        message("later_urgent", later_urgent),
+    ]
+
+    try:
+        for fixture in fixtures:
+            backend.store_message(
+                "guild-test",
+                "guild-test:default_topic",
+                fixture,
+            )
+
+        since = backend.get_messages_for_topic_since(
+            "guild-test:default_topic",
+            boundary.to_int(),
+        )
+        actual_ids = [candidate.id for candidate in since]
+        expected_ids = [
+            later_urgent.to_int(),
+            later_high.to_int(),
+            later_normal.to_int(),
+        ]
+        returned_details = [
+            (
+                f"{candidate.payload['label']}"
+                f"(priority={int(candidate.priority)},"
+                f"timestamp={int(candidate.timestamp)},id={candidate.id})"
+            )
+            for candidate in since
+        ]
+        assert actual_ids == expected_ids, (
+            f"cursor={boundary.to_int()}"
+            f"(priority={boundary.priority},timestamp={boundary.timestamp}), "
+            f"returned={returned_details}"
+        )
+        assert all(
+            candidate.topic_published_to == "default_topic" for candidate in since
+        )
+
+        next_message = backend.get_next_message_for_topic_since(
+            "guild-test:default_topic",
+            boundary.to_int(),
+        )
+        assert next_message is not None
+        assert next_message.id == later_urgent.to_int()
+    finally:
+        backend.cleanup()

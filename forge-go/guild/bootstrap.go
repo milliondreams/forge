@@ -344,24 +344,10 @@ func buildModels(spec *protocol.GuildSpec, orgID string) (*store.GuildModel, []s
 
 	var am []store.AgentModel
 	for i, aSpec := range spec.Agents {
-		agentID := aSpec.ID
-		if agentID == "" {
-			agentID = fmt.Sprintf("%s#a-%d", gm.ID, i)
+		if aSpec.ID == "" {
+			aSpec.ID = fmt.Sprintf("%s#a-%d", gm.ID, i)
 		}
-		am = append(am, store.AgentModel{
-			ID:                     agentID,
-			GuildID:                &gm.ID,
-			Name:                   aSpec.Name,
-			Description:            aSpec.Description,
-			ClassName:              aSpec.ClassName,
-			Properties:             store.JSONB(aSpec.Properties),
-			AdditionalTopics:       store.JSONBStringList(aSpec.AdditionalTopics),
-			DependencyMap:          dependencySpecsToJSONB(aSpec.DependencyMap),
-			AdditionalDependencies: store.JSONBStringList(aSpec.AdditionalDependencies),
-			ForgeExtraDeps:         store.JSONBStringList(aSpec.ForgeExtraDeps),
-			Predicates:             runtimePredicatesToJSONB(aSpec.Predicates),
-			Status:                 store.AgentStatusPendingLaunch,
-		})
+		am = append(am, *store.FromAgentSpec(&aSpec, gm.ID))
 	}
 
 	return gm, am
@@ -375,22 +361,6 @@ func dependencySpecsToJSONB(specs map[string]protocol.DependencySpec) store.JSON
 			"class_name": v.ClassName,
 			"properties": v.Properties,
 		}
-	}
-	return out
-}
-
-func runtimePredicatesToJSONB(predicates map[string]protocol.RuntimePredicate) store.JSONB {
-	out := store.JSONB{}
-	for k, v := range predicates {
-		b, err := json.Marshal(v)
-		if err != nil {
-			continue
-		}
-		var m map[string]interface{}
-		if err := json.Unmarshal(b, &m); err != nil {
-			continue
-		}
-		out[k] = m
 	}
 	return out
 }

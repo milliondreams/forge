@@ -235,7 +235,9 @@ func (b *NATSBackend) GetMessagesForTopic(_ context.Context, namespace, topic st
 }
 
 // GetMessagesSince retrieves messages published after the sinceID message, using
-// its embedded timestamp as a JetStream start-time hint and filtering by ID in memory.
+// its embedded timestamp as a JetStream start-time hint and filtering by timestamp
+// in memory. Gemstone IDs sort by priority before timestamp, so raw ID comparison
+// would drop newer messages with a higher priority.
 func (b *NATSBackend) GetMessagesSince(_ context.Context, namespace, topic string, sinceID uint64) ([]protocol.Message, error) {
 	nsTopic := namespace + ":" + topic
 
@@ -277,7 +279,12 @@ func (b *NATSBackend) GetMessagesSince(_ context.Context, namespace, topic strin
 		for _, m := range natsMsgs {
 			var msg protocol.Message
 			if jsonErr := json.Unmarshal(m.Data, &msg); jsonErr == nil {
-				if msg.ID > sinceID {
+				msgGemstone, parseErr := protocol.ParseGemstoneID(msg.ID)
+				if parseErr != nil {
+					_ = m.Ack()
+					return nil, fmt.Errorf("failed to parse message ID %d: %w", msg.ID, parseErr)
+				}
+				if msgGemstone.Timestamp > gemstone.Timestamp {
 					messages = append(messages, msg)
 				}
 			}

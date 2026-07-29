@@ -141,6 +141,33 @@ func TestBuildModels_PersistsRoutes(t *testing.T) {
 	require.Equal(t, []string{"echo_topic"}, []string(gm.Routes[0].DestinationTopics))
 }
 
+func TestBuildModels_PreservesAgentBehaviorFlags(t *testing.T) {
+	listenToDefault := true
+	actOnlyWhenTagged := true
+	spec := &protocol.GuildSpec{
+		ID:          "g-agent-flags",
+		Name:        "Agent Flags",
+		Description: "Guild with explicit agent behavior flags",
+		Properties:  map[string]interface{}{},
+		Agents: []protocol.AgentSpec{
+			{
+				ID:                   "echo",
+				Name:                 "Echo Agent",
+				Description:          "Echo",
+				ClassName:            "rustic_ai.core.agents.testutils.echo_agent.EchoAgent",
+				ListenToDefaultTopic: &listenToDefault,
+				ActOnlyWhenTagged:    &actOnlyWhenTagged,
+			},
+		},
+	}
+
+	_, agents := buildModels(spec, "org-1")
+
+	require.Len(t, agents, 1)
+	require.True(t, agents[0].ListenToDefaultTopic)
+	require.True(t, agents[0].ActOnlyWhenTagged)
+}
+
 func TestNormalizeRuntimeSpecIDs_AssignsGuildScopedDefaults(t *testing.T) {
 	spec := &protocol.GuildSpec{
 		Name:        "Guild",

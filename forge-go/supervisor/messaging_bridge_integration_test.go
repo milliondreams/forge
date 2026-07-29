@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -252,6 +253,111 @@ func bridgeRoundTrip(t *testing.T, backend messaging.Backend) {
 	require.True(t, resp.OK, "cleanup: %s", resp.Error)
 }
 
+func bridgeDefaultTopicPriorityBoundary(t *testing.T, backend messaging.Backend) {
+	t.Helper()
+	ctx := context.Background()
+
+	bridge, err := NewAgentMessagingBridge(ctx, "guild-test", "agent-test", t.TempDir(), backend)
+	require.NoError(t, err)
+	defer bridge.Close()
+
+	sock := zmq4.NewPair(ctx, zmq4.WithAutomaticReconnect(false))
+	require.NoError(t, sock.Dial(bridge.Endpoint()))
+	defer func() { _ = sock.Close() }()
+	time.Sleep(50 * time.Millisecond)
+
+	baseTimestamp := protocol.EPOCH + 1_000_000
+	boundary, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp, 1, 0)
+	require.NoError(t, err)
+	sameMillisecond, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp, 1, 1)
+	require.NoError(t, err)
+	laterNormal, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp+1, 1, 0)
+	require.NoError(t, err)
+	laterHigh, err := protocol.NewGemstoneID(protocol.PriorityHigh, baseTimestamp+2, 1, 0)
+	require.NoError(t, err)
+	laterUrgent, err := protocol.NewGemstoneID(protocol.PriorityUrgent, baseTimestamp+3, 1, 0)
+	require.NoError(t, err)
+
+	require.Less(t, laterHigh.ToInt(), boundary.ToInt())
+	require.Less(t, laterUrgent.ToInt(), boundary.ToInt())
+
+	fixtures := []struct {
+		label string
+		id    protocol.GemstoneID
+	}{
+		{label: "boundary", id: boundary},
+		{label: "same_millisecond", id: sameMillisecond},
+		{label: "later_normal", id: laterNormal},
+		{label: "later_high", id: laterHigh},
+		{label: "later_urgent", id: laterUrgent},
+	}
+	for i, fixture := range fixtures {
+		msg := makeTestMessage(t, fixture.id, fixture.label)
+		msg.Topics = protocol.TopicsFromString("default_topic")
+		raw, marshalErr := json.Marshal(msg)
+		require.NoError(t, marshalErr)
+
+		resp := zmqRequest(t, sock, bridgeEnvelope{
+			Kind:      "request",
+			Op:        "publish",
+			RequestID: "priority-publish-" + fixture.label,
+			Namespace: "guild-test",
+			Topic:     "guild-test:default_topic",
+			Message:   raw,
+		})
+		require.Truef(t, resp.OK, "publish fixture %d (%s): %s", i, fixture.label, resp.Error)
+	}
+
+	resp := zmqRequest(t, sock, bridgeEnvelope{
+		Kind:      "request",
+		Op:        "get_since",
+		RequestID: "priority-get-since",
+		Namespace: "guild-test",
+		Topic:     "guild-test:default_topic",
+		SinceID:   boundary.ToInt(),
+	})
+	require.True(t, resp.OK, "get_since: %s", resp.Error)
+
+	actualIDs := make([]uint64, 0, len(resp.Messages))
+	actualDetails := make([]string, 0, len(resp.Messages))
+	for _, raw := range resp.Messages {
+		var msg protocol.Message
+		require.NoError(t, json.Unmarshal(raw, &msg))
+		actualIDs = append(actualIDs, msg.ID)
+		require.NotNil(t, msg.TopicPublishedTo)
+		assert.Equal(t, "default_topic", *msg.TopicPublishedTo)
+
+		var payload struct {
+			Data string `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+		gemstone, parseErr := protocol.ParseGemstoneID(msg.ID)
+		require.NoError(t, parseErr)
+		actualDetails = append(actualDetails, fmt.Sprintf(
+			"%s(priority=%d,timestamp=%d,id=%d)",
+			payload.Data, gemstone.Priority, gemstone.Timestamp, msg.ID,
+		))
+	}
+	expectedIDs := []uint64{laterUrgent.ToInt(), laterHigh.ToInt(), laterNormal.ToInt()}
+	assert.Equalf(t, expectedIDs, actualIDs,
+		"cursor=%d(priority=%d,timestamp=%d), returned=%v",
+		boundary.ToInt(), boundary.Priority, boundary.Timestamp, actualDetails)
+
+	resp = zmqRequest(t, sock, bridgeEnvelope{
+		Kind:      "request",
+		Op:        "get_next",
+		RequestID: "priority-get-next",
+		Namespace: "guild-test",
+		Topic:     "guild-test:default_topic",
+		SinceID:   boundary.ToInt(),
+	})
+	require.True(t, resp.OK, "get_next: %s", resp.Error)
+	require.NotNil(t, resp.Message)
+	var next protocol.Message
+	require.NoError(t, json.Unmarshal(resp.Message, &next))
+	assert.Equal(t, laterUrgent.ToInt(), next.ID)
+}
+
 func TestBridgeRoundTrip_Redis(t *testing.T) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
@@ -264,6 +370,20 @@ func TestBridgeRoundTrip_Redis(t *testing.T) {
 	defer func() { _ = backend.Close() }()
 
 	bridgeRoundTrip(t, backend)
+}
+
+func TestBridgeDefaultTopicPriorityBoundary_Redis(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = rdb.Close() }()
+
+	backend := messaging.NewRedisBackend(rdb)
+	defer func() { _ = backend.Close() }()
+
+	bridgeDefaultTopicPriorityBoundary(t, backend)
 }
 
 func startInProcessNATSServer(t *testing.T) *server.Server {
@@ -295,4 +415,18 @@ func TestBridgeRoundTrip_NATS(t *testing.T) {
 	defer func() { _ = backend.Close() }()
 
 	bridgeRoundTrip(t, backend)
+}
+
+func TestBridgeDefaultTopicPriorityBoundary_NATS(t *testing.T) {
+	s := startInProcessNATSServer(t)
+
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	backend, err := messaging.NewNATSBackend(nc)
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	bridgeDefaultTopicPriorityBoundary(t, backend)
 }

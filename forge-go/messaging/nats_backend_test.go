@@ -2,6 +2,8 @@ package messaging_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -128,6 +130,99 @@ func TestNATSGetMessagesSince(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs2, 1)
 	assert.Equal(t, id3.ToInt(), msgs2[0].ID)
+}
+
+func TestNATSDefaultTopicPriorityBoundaryParity(t *testing.T) {
+	s := startInProcessNATSServer(t)
+
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	defer func() { _ = nc.Drain() }()
+
+	backend, err := messaging.NewNATSBackend(nc)
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+
+	ctx := context.Background()
+	const (
+		namespace = "guild-test"
+		topic     = "default_topic"
+	)
+	baseTimestamp := protocol.EPOCH + 1_000_000
+
+	boundary, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp, 1, 0)
+	require.NoError(t, err)
+	sameMillisecond, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp, 1, 1)
+	require.NoError(t, err)
+	laterNormal, err := protocol.NewGemstoneID(protocol.PriorityNormal, baseTimestamp+1, 1, 0)
+	require.NoError(t, err)
+	laterHigh, err := protocol.NewGemstoneID(protocol.PriorityHigh, baseTimestamp+2, 1, 0)
+	require.NoError(t, err)
+	laterUrgent, err := protocol.NewGemstoneID(protocol.PriorityUrgent, baseTimestamp+3, 1, 0)
+	require.NoError(t, err)
+
+	require.Less(t, laterHigh.ToInt(), boundary.ToInt(), "higher-priority newer ID must reproduce numeric inversion")
+	require.Less(t, laterUrgent.ToInt(), boundary.ToInt(), "urgent newer ID must reproduce numeric inversion")
+
+	fixtures := []struct {
+		label string
+		id    protocol.GemstoneID
+	}{
+		{label: "boundary", id: boundary},
+		{label: "same_millisecond", id: sameMillisecond},
+		{label: "later_normal", id: laterNormal},
+		{label: "later_high", id: laterHigh},
+		{label: "later_urgent", id: laterUrgent},
+	}
+	for _, fixture := range fixtures {
+		msg := protocol.NewMessageFromGemstoneID(fixture.id)
+		msg.Topics = protocol.TopicsFromString(topic)
+		msg.Payload = json.RawMessage(`{"label":"` + fixture.label + `"}`)
+		require.NoError(t, backend.PublishMessage(ctx, namespace, topic, &msg))
+	}
+
+	otherGuildMsg := protocol.NewMessageFromGemstoneID(laterNormal)
+	require.NoError(t, backend.PublishMessage(ctx, "guild-other", topic, &otherGuildMsg))
+
+	messages, err := backend.GetMessagesSince(ctx, namespace, topic, boundary.ToInt())
+	require.NoError(t, err)
+
+	actualIDs := make([]uint64, 0, len(messages))
+	actualDetails := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		actualIDs = append(actualIDs, msg.ID)
+		require.NotNil(t, msg.TopicPublishedTo)
+		assert.Equal(t, topic, *msg.TopicPublishedTo)
+
+		var payload struct {
+			Label string `json:"label"`
+		}
+		require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+		gemstone, parseErr := protocol.ParseGemstoneID(msg.ID)
+		require.NoError(t, parseErr)
+		actualDetails = append(actualDetails, fmt.Sprintf(
+			"%s(priority=%d,timestamp=%d,id=%d)",
+			payload.Label, gemstone.Priority, gemstone.Timestamp, msg.ID,
+		))
+	}
+	expectedIDs := []uint64{laterUrgent.ToInt(), laterHigh.ToInt(), laterNormal.ToInt()}
+	assert.Equalf(t, expectedIDs, actualIDs,
+		"cursor=%d(priority=%d,timestamp=%d), returned=%v",
+		boundary.ToInt(), boundary.Priority, boundary.Timestamp, actualDetails)
+
+	history, err := backend.GetMessagesForTopic(ctx, namespace, topic)
+	require.NoError(t, err)
+	require.Len(t, history, len(fixtures), "guild namespace must isolate default_topic history")
+
+	byID, err := backend.GetMessagesByID(ctx, namespace, []uint64{
+		laterHigh.ToInt(),
+		999999999,
+		boundary.ToInt(),
+	})
+	require.NoError(t, err)
+	require.Len(t, byID, 2)
+	assert.Equal(t, laterHigh.ToInt(), byID[0].ID)
+	assert.Equal(t, boundary.ToInt(), byID[1].ID)
 }
 
 func TestNATSGetMessagesByID(t *testing.T) {
