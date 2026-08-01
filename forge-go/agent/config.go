@@ -1,6 +1,11 @@
 package agent
 
-import "github.com/rustic-ai/forge/forge-go/oauth"
+import (
+	"time"
+
+	"github.com/rustic-ai/forge/forge-go/oauth"
+	"github.com/rustic-ai/forge/forge-go/supervisor"
+)
 
 type ServerConfig struct {
 	DatabaseURL             string
@@ -35,22 +40,30 @@ type ServerConfig struct {
 	TelemetrySQLiteBinary   string
 	TelemetrySQLiteDBPath   string
 	TelemetrySQLitePort     int
+	AgentOSMode             bool
+	AgentOSStateSchema      int
+	ShutdownTimeout         time.Duration
 }
 
 type ClientConfig struct {
-	ServerURL         string
-	RedisURL          string
-	NATSUrl           string
-	DataDir           string
-	CPUs              int
-	Memory            int
-	GPUs              int
-	NodeID            string
-	MetricsAddr       string
-	DefaultSupervisor string
-	DefaultTransport  string
-	ZMQBridgeMode     string
-	AttachProcessTree bool
-	StopAgentsOnExit  bool
-	OAuthManager      *oauth.Manager
+	ServerURL          string
+	RedisURL           string
+	NATSUrl            string
+	DataDir            string
+	CPUs               int
+	Memory             int
+	GPUs               int
+	NodeID             string
+	MetricsAddr        string
+	DefaultSupervisor  string
+	DefaultTransport   string
+	ZMQBridgeMode      string
+	AttachProcessTree  bool
+	StopAgentsOnExit   bool
+	OAuthManager       *oauth.Manager
+	AgentOSMode        bool
+	ShutdownTimeout    time.Duration
+	OnReady            func()
+	OnDependencyStatus func(supervisor.DependencyStatus)
+	OnDependencyCache  func(func() error)
 }

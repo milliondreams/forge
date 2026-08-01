@@ -9,6 +9,8 @@ import (
 
 func buildOrgSupervisorFactory(
 	statusStore supervisor.AgentStatusStore,
+	managerAPIBaseURL string,
+	systemRedisAddress string,
 	defaultSupervisor string,
 	defaultTransport string,
 	msgBackend messaging.Backend,
@@ -16,6 +18,8 @@ func buildOrgSupervisorFactory(
 	dataDir string,
 	attachProcessTree bool,
 	zmqBridgeMode string,
+	agentOSMode bool,
+	materializer *supervisor.DependencyMaterializer,
 ) control.SupervisorFactory {
 	bridgeMode := supervisor.NormalizeBridgeTransportMode(zmqBridgeMode)
 
@@ -33,24 +37,42 @@ func buildOrgSupervisorFactory(
 		processSup := supervisor.NewProcessSupervisor(statusStore, opts...)
 
 		var dockerSup *supervisor.DockerSupervisor
-		if ds, err := supervisor.NewDockerSupervisor(statusStore,
-			supervisor.WithDockerDefaultTransport(defaultTransport),
-			supervisor.WithDockerMessagingBackend(msgBackend),
-			supervisor.WithDockerZMQBridgeMode(bridgeMode),
-		); err == nil && ds.Available() {
-			dockerSup = ds
+		if !agentOSMode {
+			if ds, err := supervisor.NewDockerSupervisor(statusStore,
+				supervisor.WithDockerDefaultTransport(defaultTransport),
+				supervisor.WithDockerMessagingBackend(msgBackend),
+				supervisor.WithDockerZMQBridgeMode(bridgeMode),
+			); err == nil && ds.Available() {
+				dockerSup = ds
+			}
 		}
 
 		var bwrapSup *supervisor.BubblewrapSupervisor
-		bs := supervisor.NewBubblewrapSupervisor(statusStore,
+		bubblewrapOptions := []supervisor.BubblewrapSupervisorOption{
 			supervisor.WithBubblewrapDefaultTransport(defaultTransport),
 			supervisor.WithBubblewrapMessagingBackend(msgBackend),
 			supervisor.WithBubblewrapZMQBridgeMode(bridgeMode),
-		)
+			supervisor.WithBubblewrapAgentOSMode(agentOSMode),
+		}
+		if agentOSMode {
+			bubblewrapOptions = append(bubblewrapOptions,
+				supervisor.WithBubblewrapDependencyMaterializer(materializer),
+				supervisor.WithBubblewrapManagerAPIBaseURL(managerAPIBaseURL),
+				supervisor.WithBubblewrapSystemRedisAddress(systemRedisAddress),
+			)
+		}
+		bs := supervisor.NewBubblewrapSupervisor(statusStore, bubblewrapOptions...)
 		if bs.Available() {
 			bwrapSup = bs
 		}
 
-		return supervisor.NewDispatchingSupervisor(defaultSupervisor, defaultTransport, processSup, dockerSup, bwrapSup)
+		return supervisor.NewDispatchingSupervisor(
+			defaultSupervisor,
+			defaultTransport,
+			processSup,
+			dockerSup,
+			bwrapSup,
+			supervisor.WithDispatchingAgentOSMode(agentOSMode),
+		)
 	}
 }

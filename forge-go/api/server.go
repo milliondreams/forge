@@ -3,9 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rustic-ai/forge/forge-go/api/contract"
@@ -24,19 +28,33 @@ import (
 )
 
 type Server struct {
-	store          store.Store
-	statusStore    supervisor.AgentStatusStore
-	controlPusher  protocol.ControlPusher
-	msgClient      messaging.Backend
-	infraPublisher *infraevents.Publisher
-	fileStore      *filesystem.LocalFileStore
-	localUI        *localUIState
-	observeService *observeService
-	modelFit       *modelFitService
-	oauthManager   *oauth.Manager
-	secretManager  *secrets.Manager
-	listenAddr     string
-	server         *http.Server
+	store            store.Store
+	statusStore      supervisor.AgentStatusStore
+	controlPusher    protocol.ControlPusher
+	msgClient        messaging.Backend
+	infraPublisher   *infraevents.Publisher
+	fileStore        *filesystem.LocalFileStore
+	localUI          *localUIState
+	observeService   *observeService
+	modelFit         *modelFitService
+	oauthManager     *oauth.Manager
+	secretManager    *secrets.Manager
+	listenAddr       string
+	server           *http.Server
+	ready            atomic.Bool
+	statusMu         sync.RWMutex
+	phase            string
+	startupErr       error
+	agentOSMode      bool
+	stateSchema      int
+	supervisorName   string
+	transportName    string
+	keychainName     string
+	localModelURL    string
+	prerequisites    []AgentOSPrerequisite
+	shutdownTimeout  time.Duration
+	dependencyStatus supervisor.DependencyStatus
+	dependencyClear  func() error
 }
 
 func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlPusher protocol.ControlPusher, mc messaging.Backend, fs *filesystem.LocalFileStore, listenAddr string) *Server {
@@ -57,6 +75,60 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 	return s
 }
 
+// WithAgentOS enables strict initialization and the AgentOS status contract.
+func (s *Server) WithAgentOS(stateSchema int, supervisorName, transportName string, shutdownTimeout time.Duration, prerequisites ...AgentOSPrerequisite) *Server {
+	s.agentOSMode = true
+	s.stateSchema = stateSchema
+	s.supervisorName = supervisorName
+	s.transportName = transportName
+	s.keychainName = "secret-service"
+	s.prerequisites = append([]AgentOSPrerequisite(nil), prerequisites...)
+	for _, prerequisite := range prerequisites {
+		if prerequisite.Name == "local_model_endpoint" && prerequisite.Satisfied {
+			s.localModelURL = prerequisite.Detail
+			break
+		}
+	}
+	s.shutdownTimeout = shutdownTimeout
+	s.setPhase("starting")
+	s.dependencyStatus = supervisor.DependencyStatus{Phase: "pending"}
+	return s
+}
+
+func (s *Server) SetDependencyStatus(status supervisor.DependencyStatus) {
+	s.statusMu.Lock()
+	s.dependencyStatus = status
+	s.statusMu.Unlock()
+}
+
+func (s *Server) SetDependencyCacheClear(clear func() error) {
+	s.statusMu.Lock()
+	s.dependencyClear = clear
+	s.statusMu.Unlock()
+}
+
+func (s *Server) setStartupError(err error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	if s.startupErr == nil {
+		s.startupErr = err
+	}
+	s.phase = "failed"
+}
+
+func (s *Server) setPhase(phase string) {
+	s.statusMu.Lock()
+	s.phase = phase
+	s.statusMu.Unlock()
+}
+
+// MarkReady publishes application readiness after the embedded client can
+// accept workloads. Non-AgentOS servers remain listener-ready for compatibility.
+func (s *Server) MarkReady() {
+	s.ready.Store(true)
+	s.setPhase("ready")
+}
+
 // WithOAuth initialises OAuth support. Both store backends are selected from the
 // environment: FORGE_OAUTH_TOKEN_STORE for tokens and FORGE_OAUTH_CLIENT_STORE for
 // DCR client credentials, each "memory" (default) or "keychain".
@@ -64,17 +136,29 @@ func (s *Server) WithOAuth() *Server {
 	kind := os.Getenv("FORGE_OAUTH_TOKEN_STORE")
 	cfg, err := oauth.LoadProvidersConfig(forgepath.OAuthProvidersConfigPath())
 	if err != nil {
+		if s.agentOSMode {
+			s.setStartupError(fmt.Errorf("load OAuth providers config: %w", err))
+			return s
+		}
 		fmt.Printf("WARN: failed to load OAuth providers config: %v\n", err)
 		return s
 	}
 	store, err := oauth.NewTokenStore(kind)
 	if err != nil {
+		if s.agentOSMode && strings.EqualFold(kind, "keychain") {
+			s.setStartupError(fmt.Errorf("initialize OAuth token store: %w", err))
+			return s
+		}
 		fmt.Printf("WARN: %v; falling back to in-memory token store\n", err)
 		store, _ = oauth.NewTokenStore("memory")
 	}
 	// Client credentials use their own backend (empty -> in-memory).
 	credStore, err := oauth.NewClientCredentialsStore(os.Getenv("FORGE_OAUTH_CLIENT_STORE"))
 	if err != nil {
+		if s.agentOSMode && strings.EqualFold(os.Getenv("FORGE_OAUTH_CLIENT_STORE"), "keychain") {
+			s.setStartupError(fmt.Errorf("initialize OAuth client store: %w", err))
+			return s
+		}
 		fmt.Printf("WARN: %v; falling back to in-memory client credentials store\n", err)
 		credStore, _ = oauth.NewClientCredentialsStore("memory")
 	}
@@ -100,6 +184,10 @@ func (s *Server) OAuthManager() *oauth.Manager {
 func (s *Server) WithSecrets() *Server {
 	store, err := secrets.NewSecretStore(os.Getenv("FORGE_SECRET_STORE"))
 	if err != nil {
+		if s.agentOSMode && strings.EqualFold(os.Getenv("FORGE_SECRET_STORE"), "keychain") {
+			s.setStartupError(fmt.Errorf("initialize secret store: %w", err))
+			return s
+		}
 		fmt.Printf("WARN: %v; falling back to in-memory secret store\n", err)
 		store, _ = secrets.NewSecretStore("memory")
 	}
@@ -133,6 +221,12 @@ func (s *Server) WithModelFit(catalogPath, dependencyConfigPath string, profiler
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	s.statusMu.RLock()
+	startupErr := s.startupErr
+	s.statusMu.RUnlock()
+	if startupErr != nil {
+		return startupErr
+	}
 	gin.SetMode(gin.ReleaseMode)
 	router := s.buildRouter()
 
@@ -141,17 +235,40 @@ func (s *Server) Start(ctx context.Context) error {
 		Handler: WithLogging(WithRecovery(WithCORS(WithJSONResponse(WithTelemetry("forge.http", router))))),
 	}
 
+	listener, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		s.setPhase("failed")
+		return fmt.Errorf("listen %s: %w", s.listenAddr, err)
+	}
+	if s.agentOSMode {
+		s.ready.Store(false)
+		s.setPhase("waiting_for_client")
+	} else {
+		s.MarkReady()
+	}
 	errChan := make(chan error, 1)
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		return s.server.Shutdown(context.Background())
+		s.ready.Store(false)
+		s.setPhase("draining")
+		timeout := s.shutdownTimeout
+		if timeout <= 0 {
+			timeout = 20 * time.Second
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		err := s.server.Shutdown(shutdownCtx)
+		s.setPhase("stopped")
+		return err
 	case err := <-errChan:
+		s.ready.Store(false)
+		s.setPhase("failed")
 		return fmt.Errorf("http server error: %w", err)
 	}
 }
@@ -160,6 +277,8 @@ func (s *Server) buildRouter() *gin.Engine {
 	router := gin.New()
 	router.RedirectTrailingSlash = true
 	router.GET("/ping", s.Healthz)
+	router.GET("/agentos/v1/status", s.AgentOSStatus)
+	router.DELETE("/agentos/v1/dependencies/cache", s.ClearAgentOSDependencyCache)
 	router.DELETE("/nodes/:node_id", wrapHTTPWithPathValues(NodeDeregisterHandler, "node_id"))
 
 	router.POST("/manager/guilds/ensure", wrapHTTPWithPathValues(s.HandleManagerEnsureGuild))

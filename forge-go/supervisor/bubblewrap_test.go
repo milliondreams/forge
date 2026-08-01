@@ -2,8 +2,10 @@ package supervisor
 
 import (
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/registry"
 )
 
@@ -203,5 +205,120 @@ func TestBuildBwrapArgsBindsInheritedWritablePaths(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected inherited XDG_DATA_HOME bind for %s in args: %v", xdgData, args)
+	}
+}
+
+func TestAgentOSBubblewrapHidesControlPlaneAndNeverSharesNetwork(t *testing.T) {
+	sup := NewBubblewrapSupervisor(nil, WithBubblewrapAgentOSMode(true))
+	args := sup.buildBwrapArgs(
+		&registry.AgentRegistryEntry{Network: []string{"none"}},
+		[]string{"python", "-m", "agent"},
+		nil,
+		nil,
+	)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--tmpfs /var/lib/agentos", "--tmpfs /run", "--tmpfs /home", "--tmpfs /workspace", "--new-session"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing AgentOS isolation %q in %v", want, args)
+		}
+	}
+	if strings.Contains(joined, "--share-net") {
+		t.Fatalf("AgentOS sandbox must not share the guest network: %v", args)
+	}
+}
+
+func TestAgentOSSystemAgentGetsOnlyManagerControlDestination(t *testing.T) {
+	sup := NewBubblewrapSupervisor(nil,
+		WithBubblewrapAgentOSMode(true),
+		WithBubblewrapManagerAPIBaseURL("http://127.0.0.1:3001"),
+	)
+	destinations, err := sup.agentOSRelayDestinations(
+		&registry.AgentRegistryEntry{Network: []string{"api.openai.com"}},
+		&protocol.AgentSpec{ClassName: "rustic_ai.forge.agents.system.guild_manager_agent.GuildManagerAgent"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(destinations) != 1 || destinations[0] != "127.0.0.1:3001" {
+		t.Fatalf("system-agent relay destinations = %v", destinations)
+	}
+}
+
+func TestAgentOSUserAgentRelayDoesNotGainManagerDestination(t *testing.T) {
+	sup := NewBubblewrapSupervisor(nil,
+		WithBubblewrapAgentOSMode(true),
+		WithBubblewrapManagerAPIBaseURL("http://127.0.0.1:3001"),
+	)
+	destinations, err := sup.agentOSRelayDestinations(
+		&registry.AgentRegistryEntry{Network: []string{"api.openai.com"}},
+		&protocol.AgentSpec{ClassName: "example.UserAgent"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(destinations) != 1 || destinations[0] != "api.openai.com" {
+		t.Fatalf("user-agent relay destinations = %v", destinations)
+	}
+}
+
+func TestAgentOSBubblewrapExposesOnlyGrantedWorkspace(t *testing.T) {
+	sup := NewBubblewrapSupervisor(nil, WithBubblewrapAgentOSMode(true))
+	args := sup.buildBwrapArgs(
+		&registry.AgentRegistryEntry{Filesystem: []registry.FilesystemPermission{{
+			Path: "/workspace/granted",
+			Mode: "rw",
+		}}},
+		[]string{"python", "-m", "agent"},
+		nil,
+		nil,
+	)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--tmpfs /workspace") {
+		t.Fatalf("AgentOS must mask the VM-wide workspace mount: %v", args)
+	}
+	if !strings.Contains(joined, "--bind /workspace/granted /workspace/granted") {
+		t.Fatalf("AgentOS must overlay the explicitly granted workspace: %v", args)
+	}
+}
+
+func TestAgentOSBubblewrapEnvironmentIsAllowlisted(t *testing.T) {
+	env := bubblewrapChildEnv([]string{
+		"FORGE_AGENT_TRANSPORT=supervisor-zmq",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+		"FORGE_DATABASE_URL=sqlite:///var/lib/agentos/forge.db",
+		"LD_PRELOAD=/tmp/inject.so",
+	}, true)
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "FORGE_AGENT_TRANSPORT=supervisor-zmq") {
+		t.Fatalf("required scoped env missing: %v", env)
+	}
+	for _, denied := range []string{"DBUS_SESSION_BUS_ADDRESS", "FORGE_DATABASE_URL", "LD_PRELOAD"} {
+		if strings.Contains(joined, denied) {
+			t.Fatalf("denied environment %s leaked: %v", denied, env)
+		}
+	}
+}
+
+func TestAgentOSBubblewrapMountsOnlySelectedEnvironmentReadOnly(t *testing.T) {
+	sup := NewBubblewrapSupervisor(nil, WithBubblewrapAgentOSMode(true))
+	environment := &DependencyEnvironment{Path: "/var/lib/agentos/dependencies/environments/key", Key: "key"}
+	args := sup.buildBwrapArgsWithEnvironment(
+		&registry.AgentRegistryEntry{Network: []string{"none"}},
+		[]string{dependencyEnvironmentTarget + "/bin/python", "-m", "rustic_ai.forge.agent_runner"},
+		nil, nil, environment, nil,
+	)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--ro-bind "+environment.Path+" "+dependencyEnvironmentTarget) {
+		t.Fatalf("selected environment is not mounted read-only: %v", args)
+	}
+	for _, prohibited := range []string{"dependencies/cache", "dependencies/receipts", "--share-net"} {
+		if strings.Contains(joined, prohibited) {
+			t.Fatalf("AgentOS dependency isolation leaked %q: %v", prohibited, args)
+		}
+	}
+	environmentMount := strings.Index(joined, "--ro-bind "+environment.Path)
+	stateMask := strings.Index(joined, "--tmpfs /var/lib/agentos")
+	if environmentMount < 0 || stateMask < 0 || environmentMount > stateMask {
+		t.Fatalf("environment must be mounted before AgentOS state is masked: %v", args)
 	}
 }

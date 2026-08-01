@@ -31,6 +31,26 @@ func WithBubblewrapZMQBridgeMode(mode BridgeTransportMode) BubblewrapSupervisorO
 	return func(*BubblewrapSupervisor) {}
 }
 
+// WithBubblewrapAgentOSMode is a no-op on Windows.
+func WithBubblewrapAgentOSMode(enabled bool) BubblewrapSupervisorOption {
+	return func(*BubblewrapSupervisor) {}
+}
+
+// WithBubblewrapDependencyMaterializer is a no-op on Windows.
+func WithBubblewrapDependencyMaterializer(materializer *DependencyMaterializer) BubblewrapSupervisorOption {
+	return func(*BubblewrapSupervisor) {}
+}
+
+// WithBubblewrapManagerAPIBaseURL is a no-op on Windows.
+func WithBubblewrapManagerAPIBaseURL(baseURL string) BubblewrapSupervisorOption {
+	return func(*BubblewrapSupervisor) {}
+}
+
+// WithBubblewrapSystemRedisAddress is a no-op on Windows.
+func WithBubblewrapSystemRedisAddress(address string) BubblewrapSupervisorOption {
+	return func(*BubblewrapSupervisor) {}
+}
+
 func NewBubblewrapSupervisor(statusStore AgentStatusStore, opts ...BubblewrapSupervisorOption) *BubblewrapSupervisor {
 	return &BubblewrapSupervisor{}
 }

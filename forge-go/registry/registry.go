@@ -122,6 +122,12 @@ func (r *Registry) InjectNetwork(className string, networks []string) error {
 	return nil
 }
 
+// IsSystemAgentClass identifies Forge control-plane agents. AgentOS keeps these
+// agents offline even when user-agent egress domains are configured.
+func IsSystemAgentClass(className string) bool {
+	return strings.HasPrefix(className, "rustic_ai.forge.agents.system.")
+}
+
 // ClassNames returns all registered class names.
 func (r *Registry) ClassNames() []string {
 	classNames := make([]string, 0, len(r.entries))
@@ -213,6 +219,39 @@ func ResolveCommand(entry *AgentRegistryEntry, extraDeps []string) []string {
 	}
 
 	return cmd
+}
+
+// DependencyRequirements returns the Python packages represented by the
+// existing uvx command contract without changing that native command contract.
+// AgentOS uses this list to materialize an immutable environment before launch.
+func DependencyRequirements(entry *AgentRegistryEntry, extraDeps []string) []string {
+	forgePkg := strings.TrimSpace(os.Getenv("FORGE_PYTHON_PKG"))
+	if forgePkg == "" {
+		forgePkg = "rusticai-forge"
+	}
+	requirements := []string{forgePkg, "rusticai-core"}
+	requirements = append(requirements, entry.WithDependencies...)
+	if envDeps := os.Getenv("FORGE_EXTRA_DEPS"); envDeps != "" {
+		requirements = appendDependencyValues(requirements, envDeps)
+	}
+	for _, dependency := range extraDeps {
+		requirements = appendDependencyValues(requirements, dependency)
+	}
+	for _, pkg := range strings.Split(entry.Package, ",") {
+		if pkg = strings.TrimSpace(pkg); pkg != "" {
+			requirements = append(requirements, pkg)
+		}
+	}
+	return requirements
+}
+
+func appendDependencyValues(requirements []string, value string) []string {
+	for _, dependency := range strings.Split(value, ",") {
+		if dependency = strings.TrimSpace(dependency); dependency != "" {
+			requirements = append(requirements, dependency)
+		}
+	}
+	return requirements
 }
 
 // appendWithDeps appends a `--with <dep>` pair for every non-empty, whitespace-trimmed

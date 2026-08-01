@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -160,9 +161,17 @@ func (h *ControlQueueHandler) Start(ctx context.Context) error {
 // If stopAgentsOnExit is false (the default for standalone clients),
 // only the listener is stopped — agents keep running across client restarts.
 func (h *ControlQueueHandler) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = h.StopContext(ctx)
+}
+
+// StopContext rejects new queue work and drains all supervisors concurrently
+// within the caller's service shutdown deadline.
+func (h *ControlQueueHandler) StopContext(ctx context.Context) error {
 	h.listener.Stop()
 	if !h.stopAgentsOnExit {
-		return
+		return nil
 	}
 
 	supervisors := make([]supervisor.AgentSupervisor, 0, len(h.supByOrg)+1)
@@ -178,11 +187,26 @@ func (h *ControlQueueHandler) Stop() {
 		h.supMu.RUnlock()
 	}
 
+	var wg sync.WaitGroup
+	errs := make(chan error, len(supervisors))
 	for _, sup := range supervisors {
-		if err := sup.StopAll(context.Background()); err != nil {
-			slog.Warn("failed to stop managed agents during control handler shutdown", "error", err)
-		}
+		sup := sup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := sup.StopAll(ctx); err != nil {
+				slog.Warn("failed to stop managed agents during control handler shutdown", "error", err)
+				errs <- err
+			}
+		}()
 	}
+	wg.Wait()
+	close(errs)
+	var joined []error
+	for err := range errs {
+		joined = append(joined, err)
+	}
+	return errors.Join(joined...)
 }
 
 func (h *ControlQueueHandler) sendError(ctx context.Context, requestID, detail string) {

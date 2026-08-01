@@ -282,6 +282,9 @@ func (b *GuildBuilder) BuildSpec() (*protocol.GuildSpec, error) {
 	if err := b.mergeDependencyMap(forgepath.DependencyConfigPath()); err != nil {
 		return nil, fmt.Errorf("failed to merge dependencies: %w", err)
 	}
+	if err := applyLocalModelEndpointOverride(&b.spec); err != nil {
+		return nil, fmt.Errorf("failed to apply local model endpoint: %w", err)
+	}
 
 	if err := b.resolveTemplates(); err != nil {
 		return nil, fmt.Errorf("failed to resolve templates: %w", err)

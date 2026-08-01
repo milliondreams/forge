@@ -33,6 +33,24 @@ type ManagedAgent struct {
 
 	// Channels for coordinated shutdown
 	stopCh chan struct{}
+
+	dependencyEnvironment *DependencyEnvironment
+}
+
+func (m *ManagedAgent) SetDependencyEnvironment(environment *DependencyEnvironment) {
+	m.mu.Lock()
+	m.dependencyEnvironment = environment
+	m.mu.Unlock()
+}
+
+func (m *ManagedAgent) ReleaseDependencyEnvironment() {
+	m.mu.Lock()
+	environment := m.dependencyEnvironment
+	m.dependencyEnvironment = nil
+	m.mu.Unlock()
+	if environment != nil {
+		environment.Release()
+	}
 }
 
 func NewManagedAgent(guildID, id string) *ManagedAgent {

@@ -5,6 +5,7 @@ package supervisor
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,13 +27,19 @@ import (
 )
 
 type BubblewrapSupervisor struct {
-	mu               sync.RWMutex
-	agents           map[string]*ManagedAgent
-	bridges          map[string]*AgentMessagingBridge
-	statusStore      AgentStatusStore
-	msgBackend       messaging.Backend
-	defaultTransport protocol.AgentTransportMode
-	zmqBridgeMode    BridgeTransportMode
+	mu                 sync.RWMutex
+	agents             map[string]*ManagedAgent
+	bridges            map[string]*AgentMessagingBridge
+	networkRelays      map[string]*AgentNetworkRelay
+	systemTCPRelays    map[string]*AgentTCPRelay
+	statusStore        AgentStatusStore
+	msgBackend         messaging.Backend
+	defaultTransport   protocol.AgentTransportMode
+	zmqBridgeMode      BridgeTransportMode
+	agentOSMode        bool
+	materializer       *DependencyMaterializer
+	managerAPIBaseURL  string
+	systemRedisAddress string
 }
 
 // BubblewrapSupervisorOption configures a BubblewrapSupervisor.
@@ -59,10 +66,45 @@ func WithBubblewrapZMQBridgeMode(mode BridgeTransportMode) BubblewrapSupervisorO
 	}
 }
 
+// WithBubblewrapAgentOSMode enables the fail-closed guest policy: no inherited
+// host environment, no guest control-plane state, and no shared network
+// namespace.
+func WithBubblewrapAgentOSMode(enabled bool) BubblewrapSupervisorOption {
+	return func(b *BubblewrapSupervisor) {
+		b.agentOSMode = enabled
+	}
+}
+
+// WithBubblewrapDependencyMaterializer installs the trusted AgentOS-only
+// materializer. It is deliberately ignored by native launch construction.
+func WithBubblewrapDependencyMaterializer(materializer *DependencyMaterializer) BubblewrapSupervisorOption {
+	return func(b *BubblewrapSupervisor) {
+		b.materializer = materializer
+	}
+}
+
+// WithBubblewrapManagerAPIBaseURL configures the sole loopback control-plane
+// destination available to AgentOS system agents through their private relay.
+func WithBubblewrapManagerAPIBaseURL(baseURL string) BubblewrapSupervisorOption {
+	return func(b *BubblewrapSupervisor) {
+		b.managerAPIBaseURL = strings.TrimSpace(baseURL)
+	}
+}
+
+// WithBubblewrapSystemRedisAddress configures the loopback Redis endpoint
+// exposed to AgentOS system agents over a private Unix-socket relay.
+func WithBubblewrapSystemRedisAddress(address string) BubblewrapSupervisorOption {
+	return func(b *BubblewrapSupervisor) {
+		b.systemRedisAddress = strings.TrimSpace(address)
+	}
+}
+
 func NewBubblewrapSupervisor(statusStore AgentStatusStore, opts ...BubblewrapSupervisorOption) *BubblewrapSupervisor {
 	b := &BubblewrapSupervisor{
 		agents:           make(map[string]*ManagedAgent),
 		bridges:          make(map[string]*AgentMessagingBridge),
+		networkRelays:    make(map[string]*AgentNetworkRelay),
+		systemTCPRelays:  make(map[string]*AgentTCPRelay),
 		statusStore:      statusStore,
 		defaultTransport: protocol.AgentTransportDirect,
 		zmqBridgeMode:    BridgeTransportIPC,
@@ -73,6 +115,30 @@ func NewBubblewrapSupervisor(statusStore AgentStatusStore, opts ...BubblewrapSup
 		}
 	}
 	return b
+}
+
+func (p *BubblewrapSupervisor) agentOSRelayDestinations(entry *registry.AgentRegistryEntry, agentSpec *protocol.AgentSpec) ([]string, error) {
+	if !p.agentOSMode {
+		return nil, nil
+	}
+	if registry.IsSystemAgentClass(agentSpec.ClassName) {
+		destination, err := agentOSManagerDestination(p.managerAPIBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("configure AgentOS system-agent control relay: %w", err)
+		}
+		return []string{destination}, nil
+	}
+	if len(entry.Network) == 0 || containsString(entry.Network, "none") {
+		return nil, nil
+	}
+	return append([]string(nil), entry.Network...), nil
+}
+
+func (p *BubblewrapSupervisor) agentOSSystemRedisEndpoints(agentSpec *protocol.AgentSpec) (target, listen string, err error) {
+	if !p.agentOSMode || !registry.IsSystemAgentClass(agentSpec.ClassName) || p.systemRedisAddress == "" {
+		return "", "", nil
+	}
+	return agentOSRedisRelayEndpoints(p.systemRedisAddress)
 }
 
 func (p *BubblewrapSupervisor) Available() bool {
@@ -102,10 +168,90 @@ func (p *BubblewrapSupervisor) Launch(ctx context.Context, guildID string, agent
 		agent.SetState(StateFailed)
 		return fmt.Errorf("failed to lookup agent class %s: %w", agentSpec.ClassName, err)
 	}
-
+	if p.agentOSMode {
+		for _, filesystem := range entry.Filesystem {
+			clean := filepath.Clean(filesystem.Path)
+			if clean != "/workspace" && !strings.HasPrefix(clean, "/workspace/") {
+				agent.SetState(StateFailed)
+				return fmt.Errorf("AgentOS filesystem permission %q is outside /workspace", filesystem.Path)
+			}
+		}
+	}
+	var dependencyEnvironment *DependencyEnvironment
 	runtimeCmd := registry.ResolveCommand(entry, agentSpec.ForgeExtraDeps)
+	if p.agentOSMode && entry.Runtime == registry.RuntimeUVX {
+		if p.materializer == nil {
+			agent.SetState(StateFailed)
+			return errors.New("dependency_materialization_failed: AgentOS dependency materializer is unavailable")
+		}
+		dependencyEnvironment, err = p.materializer.Prepare(ctx, DependencyRequest{
+			Requirements: registry.DependencyRequirements(entry, agentSpec.ForgeExtraDeps),
+		})
+		if err != nil {
+			agent.SetState(StateFailed)
+			agent.LastError = err
+			return err
+		}
+		agent.SetDependencyEnvironment(dependencyEnvironment)
+		runtimeCmd = []string{dependencyEnvironmentTarget + "/bin/python", "-m", "rustic_ai.forge.agent_runner"}
+	}
 	if len(runtimeCmd) == 0 {
+		agent.ReleaseDependencyEnvironment()
 		return fmt.Errorf("runtimeCmd is empty")
+	}
+
+	var networkRelay *AgentNetworkRelay
+	relayDestinations, err := p.agentOSRelayDestinations(entry, agentSpec)
+	if err != nil {
+		agent.SetState(StateFailed)
+		return err
+	}
+	if len(relayDestinations) > 0 {
+		networkRelay, err = NewAgentNetworkRelay(agentNetworkRelayRoot, key, relayDestinations)
+		if err != nil {
+			agent.SetState(StateFailed)
+			return fmt.Errorf("create scoped agent network relay: %w", err)
+		}
+		runtimeCmd = append([]string{
+			"/opt/agentos/bin/agentos-netproxy",
+			"--socket", networkRelay.SocketPath(),
+			"--listen", "127.0.0.1:18080",
+			"--",
+		}, runtimeCmd...)
+		env = append(env,
+			"HTTP_PROXY=http://127.0.0.1:18080",
+			"HTTPS_PROXY=http://127.0.0.1:18080",
+			"http_proxy=http://127.0.0.1:18080",
+			"https_proxy=http://127.0.0.1:18080",
+			"NO_PROXY=",
+			"no_proxy=",
+		)
+	}
+
+	var systemTCPRelay *AgentTCPRelay
+	redisTarget, redisListen, err := p.agentOSSystemRedisEndpoints(agentSpec)
+	if err != nil {
+		if networkRelay != nil {
+			_ = networkRelay.Close()
+		}
+		agent.SetState(StateFailed)
+		return fmt.Errorf("configure AgentOS system-agent Redis relay: %w", err)
+	}
+	if redisTarget != "" {
+		systemTCPRelay, err = NewAgentTCPRelay(agentNetworkRelayRoot, key, redisTarget)
+		if err != nil {
+			if networkRelay != nil {
+				_ = networkRelay.Close()
+			}
+			agent.SetState(StateFailed)
+			return fmt.Errorf("create scoped AgentOS system-agent Redis relay: %w", err)
+		}
+		runtimeCmd = append([]string{
+			"/opt/agentos/bin/agentos-netproxy",
+			"--socket", systemTCPRelay.SocketPath(),
+			"--listen", redisListen,
+			"--",
+		}, runtimeCmd...)
 	}
 
 	// Create ZMQ bridge when transport requires it.
@@ -113,12 +259,24 @@ func (p *BubblewrapSupervisor) Launch(ctx context.Context, guildID string, agent
 	transport := transportFromEnv(env, p.defaultTransport)
 	if transport == protocol.AgentTransportSupervisorZMQ {
 		if p.msgBackend == nil {
+			if networkRelay != nil {
+				_ = networkRelay.Close()
+			}
+			if systemTCPRelay != nil {
+				_ = systemTCPRelay.Close()
+			}
 			agent.SetState(StateFailed)
 			return fmt.Errorf("supervisor-zmq transport requires a messaging backend")
 		}
 
 		bridge, err = NewAgentMessagingBridgeWithMode(ctx, guildID, agentSpec.ID, "", p.msgBackend, p.zmqBridgeMode)
 		if err != nil {
+			if networkRelay != nil {
+				_ = networkRelay.Close()
+			}
+			if systemTCPRelay != nil {
+				_ = systemTCPRelay.Close()
+			}
 			agent.SetState(StateFailed)
 			return fmt.Errorf("failed to create agent messaging bridge: %w", err)
 		}
@@ -126,28 +284,59 @@ func (p *BubblewrapSupervisor) Launch(ctx context.Context, guildID string, agent
 		env, err = applySupervisorTransportEnv(env, bridge)
 		if err != nil {
 			bridge.Close()
+			if networkRelay != nil {
+				_ = networkRelay.Close()
+			}
+			if systemTCPRelay != nil {
+				_ = systemTCPRelay.Close()
+			}
 			agent.SetState(StateFailed)
 			return fmt.Errorf("failed to configure supervisor transport env: %w", err)
 		}
 	}
 
-	bwrapArgs := p.buildBwrapArgs(entry, runtimeCmd, bridge, env)
+	bwrapArgs := p.buildBwrapArgsWithRelays(entry, runtimeCmd, bridge, networkRelay, systemTCPRelay, dependencyEnvironment, env)
 
 	if err := p.startProcess(ctx, guildID, agent, agentSpec, bwrapArgs, env); err != nil {
 		if bridge != nil {
 			bridge.Close()
 		}
+		if networkRelay != nil {
+			_ = networkRelay.Close()
+		}
+		if systemTCPRelay != nil {
+			_ = systemTCPRelay.Close()
+		}
+		agent.ReleaseDependencyEnvironment()
 		return err
 	}
 
 	if bridge != nil {
 		p.setBridge(guildID, agentSpec.ID, bridge)
 	}
+	if networkRelay != nil {
+		p.setNetworkRelay(guildID, agentSpec.ID, networkRelay)
+	}
+	if systemTCPRelay != nil {
+		p.setSystemTCPRelay(guildID, agentSpec.ID, systemTCPRelay)
+	}
 
 	return nil
 }
 
 func (p *BubblewrapSupervisor) buildBwrapArgs(entry *registry.AgentRegistryEntry, cmd []string, bridge *AgentMessagingBridge, env []string) []string {
+	return p.buildBwrapArgsWithRelay(entry, cmd, bridge, nil, env)
+}
+
+func (p *BubblewrapSupervisor) buildBwrapArgsWithRelay(entry *registry.AgentRegistryEntry, cmd []string, bridge *AgentMessagingBridge, relay *AgentNetworkRelay, env []string) []string {
+	return p.buildBwrapArgsWithEnvironment(entry, cmd, bridge, relay, nil, env)
+}
+
+func (p *BubblewrapSupervisor) buildBwrapArgsWithEnvironment(entry *registry.AgentRegistryEntry, cmd []string, bridge *AgentMessagingBridge, relay *AgentNetworkRelay, dependencyEnvironment *DependencyEnvironment, env []string) []string {
+	return p.buildBwrapArgsWithRelays(entry, cmd, bridge, relay, nil, dependencyEnvironment, env)
+}
+
+func (p *BubblewrapSupervisor) buildBwrapArgsWithRelays(entry *registry.AgentRegistryEntry, cmd []string, bridge *AgentMessagingBridge, relay *AgentNetworkRelay, systemTCPRelay *AgentTCPRelay, dependencyEnvironment *DependencyEnvironment, env []string) []string {
 	var args []string
 
 	args = append(args,
@@ -158,6 +347,19 @@ func (p *BubblewrapSupervisor) buildBwrapArgs(entry *registry.AgentRegistryEntry
 		"--tmpfs", "/tmp",
 		"--die-with-parent",
 	)
+	if p.agentOSMode {
+		if dependencyEnvironment != nil {
+			args = append(args, "--ro-bind", dependencyEnvironment.Path, dependencyEnvironmentTarget)
+		}
+		args = append(args,
+			"--tmpfs", "/var/lib/agentos",
+			"--tmpfs", "/run",
+			"--tmpfs", "/home",
+			"--tmpfs", "/workspace",
+			"--dir", "/home/agent",
+			"--new-session",
+		)
+	}
 
 	needsNetwork := len(entry.Network) > 0 && !containsString(entry.Network, "none")
 
@@ -166,7 +368,7 @@ func (p *BubblewrapSupervisor) buildBwrapArgs(entry *registry.AgentRegistryEntry
 		needsNetwork = true
 	}
 
-	if needsNetwork {
+	if needsNetwork && !p.agentOSMode {
 		args = append(args, "--share-net")
 	}
 
@@ -184,9 +386,19 @@ func (p *BubblewrapSupervisor) buildBwrapArgs(entry *registry.AgentRegistryEntry
 		socketDir := filepath.Dir(bridge.SocketPath())
 		args = append(args, "--bind", socketDir, socketDir)
 	}
+	if relay != nil {
+		socketDir := filepath.Dir(relay.SocketPath())
+		args = append(args, "--ro-bind", socketDir, socketDir)
+	}
+	if systemTCPRelay != nil {
+		socketDir := filepath.Dir(systemTCPRelay.SocketPath())
+		if relay == nil || socketDir != filepath.Dir(relay.SocketPath()) {
+			args = append(args, "--ro-bind", socketDir, socketDir)
+		}
+	}
 
 	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
+	if homeDir != "" && !p.agentOSMode {
 		for _, path := range bubblewrapWritablePaths(homeDir, env) {
 			if err := os.MkdirAll(path, 0755); err != nil {
 				slog.Warn("failed to create host path for bubblewrap bind", "path", path, "err", err)
@@ -208,7 +420,7 @@ func (p *BubblewrapSupervisor) startProcess(ctx context.Context, guildID string,
 	defer span.End()
 
 	cmd := exec.CommandContext(ctx, "bwrap", bwrapArgs...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = bubblewrapChildEnv(env, p.agentOSMode)
 
 	propagator := otel.GetTextMapPropagator()
 	carrier := propagation.MapCarrier{}
@@ -266,6 +478,49 @@ func (p *BubblewrapSupervisor) startProcess(ctx context.Context, guildID string,
 	return nil
 }
 
+func bubblewrapChildEnv(env []string, agentOSMode bool) []string {
+	if !agentOSMode {
+		return append(os.Environ(), env...)
+	}
+	denied := map[string]struct{}{
+		"DBUS_SESSION_BUS_ADDRESS": {},
+		"GNOME_KEYRING_CONTROL":    {},
+		"FORGE_DATABASE_URL":       {},
+		"FORGE_SECRET_STORE":       {},
+		"FORGE_OAUTH_TOKEN_STORE":  {},
+		"FORGE_OAUTH_CLIENT_STORE": {},
+		"REDIS_HOST":               {},
+		"REDIS_PORT":               {},
+		"NATS_URL":                 {},
+		"LD_PRELOAD":               {},
+		"LD_LIBRARY_PATH":          {},
+		"PYTHONPATH":               {},
+		"PYTHONHOME":               {},
+		"DBUS_SYSTEM_BUS_ADDRESS":  {},
+		"PATH":                     {},
+		"HOME":                     {},
+		"TMPDIR":                   {},
+		"LANG":                     {},
+	}
+	out := []string{
+		"PATH=/opt/agentos/python/bin:/usr/local/bin:/usr/bin:/bin",
+		"HOME=/home/agent",
+		"TMPDIR=/tmp",
+		"LANG=C.UTF-8",
+	}
+	for _, value := range env {
+		key, _, ok := strings.Cut(value, "=")
+		if !ok {
+			continue
+		}
+		if _, blocked := denied[key]; blocked {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
 func (p *BubblewrapSupervisor) monitorProcess(guildID string, agent *ManagedAgent, agentSpec *protocol.AgentSpec, cmd *exec.Cmd, bwrapArgs []string, env []string) {
 	guildID = normalizeGuildID(guildID)
 	ctx, lifecycleSpan := otel.Tracer("forge.supervisor").Start(context.Background(), "bwrap.lifecycle")
@@ -316,6 +571,8 @@ func (p *BubblewrapSupervisor) monitorProcess(guildID string, agent *ManagedAgen
 	telemetry.AddAgentExitCode(guildID, agent.ID, "local-node-bwrap", exitCode)
 
 	if agent.IsStopRequested() {
+		p.stopNetworkRelay(guildID, agent.ID)
+		agent.ReleaseDependencyEnvironment()
 		agent.SetState(StateStopped)
 		if p.statusStore != nil {
 			_ = p.statusStore.DeleteStatus(ctx, guildID, agent.ID)
@@ -338,6 +595,8 @@ func (p *BubblewrapSupervisor) monitorProcess(guildID string, agent *ManagedAgen
 
 	delay := ComputeBackoff(agent.RestartCount)
 	if delay == 0 {
+		p.stopNetworkRelay(guildID, agent.ID)
+		agent.ReleaseDependencyEnvironment()
 		agent.SetState(StateFailed)
 		if p.statusStore != nil {
 			_ = p.statusStore.WriteStatus(ctx, guildID, agent.ID, &AgentStatusJSON{State: "failed", Timestamp: time.Now()}, 300*time.Second)
@@ -357,9 +616,12 @@ func (p *BubblewrapSupervisor) monitorProcess(guildID string, agent *ManagedAgen
 				if p.statusStore != nil {
 					_ = p.statusStore.WriteStatus(ctx, guildID, agent.ID, &AgentStatusJSON{State: "failed", Timestamp: time.Now()}, 300*time.Second)
 				}
+				agent.ReleaseDependencyEnvironment()
 			}
 		}
 	case <-agent.stopCh:
+		p.stopNetworkRelay(guildID, agent.ID)
+		agent.ReleaseDependencyEnvironment()
 		agent.SetState(StateStopped)
 		if p.statusStore != nil {
 			_ = p.statusStore.DeleteStatus(ctx, guildID, agent.ID)
@@ -392,14 +654,32 @@ func (p *BubblewrapSupervisor) Stop(ctx context.Context, guildID, agentID string
 			}
 		}
 
-		for i := 0; i < 50; i++ {
+		deadline := time.NewTimer(5 * time.Second)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		exited := false
+	waitLoop:
+		for {
 			if syscall.Kill(pid, 0) != nil {
+				exited = true
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				break waitLoop
+			case <-deadline.C:
+				break waitLoop
+			case <-ticker.C:
+			}
+		}
+		ticker.Stop()
+		if !deadline.Stop() {
+			select {
+			case <-deadline.C:
+			default:
+			}
 		}
 
-		if syscall.Kill(pid, 0) == nil {
+		if !exited && syscall.Kill(pid, 0) == nil {
 			if pgid > 0 {
 				if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && killErr != syscall.ESRCH {
 					slog.Warn("failed to SIGKILL process group", "pid", pid, "pgid", pgid, "error", killErr)
@@ -416,7 +696,11 @@ func (p *BubblewrapSupervisor) Stop(ctx context.Context, guildID, agentID string
 		_ = p.statusStore.DeleteStatus(ctx, agent.GuildID, agent.ID)
 		_ = p.statusStore.DeleteStatus(ctx, unknownGuildKey, agent.ID)
 	}
+	p.stopNetworkRelay(guildID, agentID)
 
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("agent %s stop deadline: %w", agentID, err)
+	}
 	return nil
 }
 
@@ -457,17 +741,26 @@ func (p *BubblewrapSupervisor) StopAll(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	var firstErr error
+	var wg sync.WaitGroup
+	errs := make(chan error, len(agents))
 	for _, agent := range agents {
-		if err := p.Stop(ctx, agent.GuildID, agent.ID); err != nil {
-			slog.Warn("failed to stop agent", "guild_id", agent.GuildID, "agent_id", agent.ID, "error", err)
-			if firstErr == nil {
-				firstErr = err
+		agent := agent
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.Stop(ctx, agent.GuildID, agent.ID); err != nil {
+				slog.Warn("failed to stop agent", "guild_id", agent.GuildID, "agent_id", agent.ID, "error", err)
+				errs <- err
 			}
-		}
+		}()
 	}
-
-	return firstErr
+	wg.Wait()
+	close(errs)
+	var joined []error
+	for err := range errs {
+		joined = append(joined, err)
+	}
+	return errors.Join(joined...)
 }
 
 func (p *BubblewrapSupervisor) setBridge(guildID, agentID string, bridge *AgentMessagingBridge) {
@@ -486,6 +779,36 @@ func (p *BubblewrapSupervisor) stopBridge(guildID, agentID string) {
 	if bridge != nil {
 		bridge.Close()
 	}
+}
+
+func (p *BubblewrapSupervisor) setNetworkRelay(guildID, agentID string, relay *AgentNetworkRelay) {
+	key := scopedAgentKey(guildID, agentID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.networkRelays[key] = relay
+}
+
+func (p *BubblewrapSupervisor) stopNetworkRelay(guildID, agentID string) {
+	key := scopedAgentKey(guildID, agentID)
+	p.mu.Lock()
+	relay := p.networkRelays[key]
+	systemTCPRelay := p.systemTCPRelays[key]
+	delete(p.networkRelays, key)
+	delete(p.systemTCPRelays, key)
+	p.mu.Unlock()
+	if relay != nil {
+		_ = relay.Close()
+	}
+	if systemTCPRelay != nil {
+		_ = systemTCPRelay.Close()
+	}
+}
+
+func (p *BubblewrapSupervisor) setSystemTCPRelay(guildID, agentID string, relay *AgentTCPRelay) {
+	key := scopedAgentKey(guildID, agentID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.systemTCPRelays[key] = relay
 }
 
 func containsString(ss []string, target string) bool {

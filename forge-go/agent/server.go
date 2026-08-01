@@ -33,6 +33,14 @@ import (
 const defaultEmbeddedRedisAddr = "127.0.0.1:6379"
 
 func StartServer(ctx context.Context, cfg *ServerConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("server config is required")
+	}
+	cfg.AgentOSMode = enableAgentOSFromEnvironment(cfg.AgentOSMode)
+	agentOSPrerequisites, err := inspectAgentOSConfig(cfg)
+	if err != nil {
+		return err
+	}
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
 
@@ -192,6 +200,17 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	}
 
 	var wg sync.WaitGroup
+	fatalErr := make(chan error, 4)
+	reportFatal := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case fatalErr <- err:
+		default:
+		}
+		cancelServer()
+	}
 	queueListener := control.NewControlQueueListener(controlPlane)
 	responder := control.NewControlQueueResponder(controlPlane)
 
@@ -336,7 +355,17 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	resolver := filesystem.NewFileSystemResolver(fsBasePath)
 	fileStore := filesystem.NewLocalFileStore(resolver)
 
-	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress).
+	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress)
+	if cfg.AgentOSMode {
+		httpServer.WithAgentOS(
+			cfg.AgentOSStateSchema,
+			cfg.ClientDefaultSupervisor,
+			cfg.ClientDefaultTransport,
+			cfg.ShutdownTimeout,
+			agentOSPrerequisites...,
+		)
+	}
+	httpServer.
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
 		WithModelFit("", cfg.DependencyConfig, nil).
 		WithOAuth().
@@ -346,6 +375,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 		defer wg.Done()
 		if err := httpServer.Start(serverCtx); err != nil {
 			l.Error("HTTP API exited with error", "error", err)
+			reportFatal(fmt.Errorf("HTTP API: %w", err))
 		}
 		l.Info("HTTP API Placeholder listening on", "address", cfg.ListenAddress)
 	}()
@@ -355,27 +385,32 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 		embeddedClientNodeID string
 	)
 	if cfg.WithClient {
-		clientServerURL := deriveManagerAPIBaseURL(cfg.ListenAddress, "")
+		clientServerURL := embeddedClientServerURL(cfg)
 		clientMetricsAddr := strings.TrimSpace(cfg.ClientMetricsAddr)
 		if clientMetricsAddr == "" {
 			clientMetricsAddr = ":9091"
 		}
 		clientCfg := &ClientConfig{
-			ServerURL:         clientServerURL,
-			RedisURL:          redisAddr,
-			NATSUrl:           natsURL,
-			DataDir:           cfg.DataDir,
-			CPUs:              cfg.ClientCPUs,
-			Memory:            cfg.ClientMemory,
-			GPUs:              cfg.ClientGPUs,
-			NodeID:            cfg.ClientNodeID,
-			MetricsAddr:       clientMetricsAddr,
-			DefaultSupervisor: cfg.ClientDefaultSupervisor,
-			DefaultTransport:  cfg.ClientDefaultTransport,
-			ZMQBridgeMode:     cfg.ClientZMQBridgeMode,
-			AttachProcessTree: true, // Embedded client: attach for reliable cleanup
-			StopAgentsOnExit:  true, // Embedded client: kill agents on server exit
-			OAuthManager:      httpServer.OAuthManager(),
+			ServerURL:          clientServerURL,
+			RedisURL:           redisAddr,
+			NATSUrl:            natsURL,
+			DataDir:            cfg.DataDir,
+			CPUs:               cfg.ClientCPUs,
+			Memory:             cfg.ClientMemory,
+			GPUs:               cfg.ClientGPUs,
+			NodeID:             cfg.ClientNodeID,
+			MetricsAddr:        clientMetricsAddr,
+			DefaultSupervisor:  cfg.ClientDefaultSupervisor,
+			DefaultTransport:   cfg.ClientDefaultTransport,
+			ZMQBridgeMode:      cfg.ClientZMQBridgeMode,
+			AttachProcessTree:  true, // Embedded client: attach for reliable cleanup
+			StopAgentsOnExit:   true, // Embedded client: kill agents on server exit
+			OAuthManager:       httpServer.OAuthManager(),
+			AgentOSMode:        cfg.AgentOSMode,
+			ShutdownTimeout:    cfg.ShutdownTimeout,
+			OnReady:            httpServer.MarkReady,
+			OnDependencyStatus: httpServer.SetDependencyStatus,
+			OnDependencyCache:  httpServer.SetDependencyCacheClear,
 		}
 		l.Info("In-process Forge client enabled",
 			"server_url", clientServerURL,
@@ -391,16 +426,27 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 			if err := waitForServerReady(clientCtx, clientServerURL, 5*time.Second); err != nil {
 				if err != context.Canceled {
 					l.Error("Failed waiting for server readiness before starting in-process client", "error", err)
+					if cfg.AgentOSMode {
+						reportFatal(fmt.Errorf("embedded client readiness: %w", err))
+					}
 				}
 				return
 			}
 			if err := StartClient(clientCtx, clientCfg); err != nil && err != context.Canceled {
 				l.Error("In-process client exited with error", "error", err)
+				if cfg.AgentOSMode {
+					reportFatal(fmt.Errorf("embedded client: %w", err))
+				}
 			}
 		}()
 	}
 
 	<-serverCtx.Done()
+	var terminalErr error
+	select {
+	case terminalErr = <-fatalErr:
+	default:
+	}
 
 	l.Info("Received cancellation signal. Commencing graceful shutdown...")
 	if cancelClient != nil {
@@ -413,7 +459,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 
 	wg.Wait()
 
-	return nil
+	return terminalErr
 }
 
 func dispatchAcceptedSpawn(ctx context.Context, controlPlane control.ControlPlane, placements *scheduler.PlacementMap, sched *scheduler.Scheduler, guildID, agentID string) error {
@@ -456,6 +502,14 @@ func dispatchAcceptedSpawn(ctx context.Context, controlPlane control.ControlPlan
 	return nil
 }
 
+func embeddedClientServerURL(cfg *ServerConfig) string {
+	explicit := ""
+	if cfg.AgentOSMode {
+		explicit = cfg.ManagerAPIBaseURL
+	}
+	return deriveManagerAPIBaseURL(cfg.ListenAddress, explicit)
+}
+
 func deriveManagerAPIBaseURL(listenAddress, explicit string) string {
 	explicit = strings.TrimSpace(explicit)
 	if explicit != "" {
@@ -478,7 +532,10 @@ func deriveManagerAPIBaseURL(listenAddress, explicit string) string {
 func waitForServerReady(ctx context.Context, baseURL string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
-	readyURL := strings.TrimRight(baseURL, "/") + "/readyz"
+	// Client registration needs only a live control-plane listener. AgentOS
+	// application readiness is published after registration, so /readyz here
+	// would create a circular wait.
+	readyURL := strings.TrimRight(baseURL, "/") + "/healthz"
 
 	for {
 		if ctx.Err() != nil {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/oauth"
@@ -68,6 +69,30 @@ func TestParseRegistry(t *testing.T) {
 	_, err = reg.Lookup("nonexistent.Agent")
 	if err == nil {
 		t.Fatal("Expected error looking up unknown class, got nil")
+	}
+}
+
+func TestIsSystemAgentClass(t *testing.T) {
+	if !IsSystemAgentClass("rustic_ai.forge.agents.system.guild_manager_agent.GuildManagerAgent") {
+		t.Fatal("Forge system agent was not recognized")
+	}
+	if IsSystemAgentClass("rustic_ai.core.agents.utils.user_proxy_agent.UserProxyAgent") {
+		t.Fatal("user agent was classified as a Forge system agent")
+	}
+}
+
+func TestDependencyRequirementsIncludesSystemBaselineAndAgentInputs(t *testing.T) {
+	t.Setenv("FORGE_PYTHON_PKG", "rusticai-forge==1.2.3")
+	t.Setenv("FORGE_EXTRA_DEPS", "global-a,global-b")
+	entry := &AgentRegistryEntry{
+		Runtime: RuntimeUVX, Package: "agent-package", WithDependencies: []string{"with-package"},
+	}
+	got := DependencyRequirements(entry, []string{"spec-a,spec-b"})
+	want := []string{
+		"rusticai-forge==1.2.3", "rusticai-core", "with-package", "global-a", "global-b", "spec-a", "spec-b", "agent-package",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("requirements = %v, want %v", got, want)
 	}
 }
 

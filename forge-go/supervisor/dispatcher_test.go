@@ -75,3 +75,34 @@ entries:
 	require.NoError(t, err)
 	require.True(t, dockerSup.launched)
 }
+
+func TestDispatchingSupervisorDoesNotFallbackWhenRequiredDefaultMissing(t *testing.T) {
+	dispatcher := NewDispatchingSupervisor("bwrap", "supervisor-zmq", &stubSupervisor{}, nil, nil)
+	_, err := dispatcher.selectSupervisor(&registry.AgentRegistryEntry{Runtime: registry.RuntimeUVX})
+	require.ErrorContains(t, err, "required default supervisor bwrap is unavailable")
+}
+
+func TestDispatchingSupervisorRejectsContainerRuntimesInAgentOSMode(t *testing.T) {
+	dispatcher := NewDispatchingSupervisor(
+		"bwrap",
+		"supervisor-zmq",
+		&stubSupervisor{},
+		&stubSupervisor{},
+		&stubSupervisor{},
+		WithDispatchingAgentOSMode(true),
+	)
+
+	for _, runtime := range []registry.RuntimeType{registry.RuntimeDocker, "podman", "Docker"} {
+		_, err := dispatcher.selectSupervisor(&registry.AgentRegistryEntry{Runtime: runtime})
+		require.ErrorContains(t, err, "not permitted in AgentOS mode")
+	}
+}
+
+func TestDispatchingSupervisorPreservesContainerRuntimeInHostMode(t *testing.T) {
+	dockerSupervisor := &stubSupervisor{}
+	dispatcher := NewDispatchingSupervisor("", "direct", nil, dockerSupervisor, nil)
+
+	selected, err := dispatcher.selectSupervisor(&registry.AgentRegistryEntry{Runtime: registry.RuntimeDocker})
+	require.NoError(t, err)
+	require.Same(t, dockerSupervisor, selected)
+}

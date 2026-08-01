@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/rustic-ai/forge/forge-go/localmodel"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"gopkg.in/yaml.v3"
 )
@@ -204,6 +205,9 @@ func LoadProfiles(catalogPath, dependencyConfigPath string) ([]ModelProfile, err
 	if err != nil {
 		return nil, err
 	}
+	if err := localmodel.ApplyDependencyOverride(deps); err != nil {
+		return nil, err
+	}
 
 	out := make([]ModelProfile, 0, len(catalog.Models))
 	seen := map[string]struct{}{}
@@ -233,6 +237,11 @@ func LoadProfiles(catalogPath, dependencyConfigPath string) ([]ModelProfile, err
 			return nil, fmt.Errorf("local model dependency key %q model mismatch: catalog=%q dependency=%q", model.DependencyKey, model.ModelName, modelName)
 		}
 		baseURL, _ := spec.Properties["base_url"].(string)
+		if conf, ok := spec.Properties["conf"].(map[string]any); ok {
+			if nested, ok := conf["base_url"].(string); ok {
+				baseURL = nested
+			}
+		}
 		model.ResolverClassName = spec.ClassName
 		model.ProvidedType = spec.ProvidedType
 		model.BaseURL = baseURL

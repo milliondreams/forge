@@ -21,7 +21,8 @@ llm_local_small:
   provided_type: rustic_ai.core.llm.LLM
   properties:
     model: openai/rustic/small
-    base_url: http://localhost:55262/v1
+    conf:
+      base_url: http://10.0.2.101:55262/v1
 llm_local_large:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
   provided_type: rustic_ai.core.llm.LLM
@@ -65,6 +66,7 @@ models:
 	require.Equal(t, "rustic_ai.core.llm.LLM", profiles[0].ProvidedType)
 	require.Equal(t, "http://localhost:55262/v1", profiles[0].BaseURL)
 	require.Equal(t, "llm_local_small", profiles[1].DependencyKey)
+	require.Equal(t, "http://10.0.2.101:55262/v1", profiles[1].BaseURL)
 	require.Equal(t, []string{"chat", "general"}, profiles[1].UseCaseTags)
 }
 
@@ -100,6 +102,40 @@ models:
 	_, err := LoadProfiles(catalogPath, dependencyConfigPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `dependency key "llm_local_missing" not found`)
+}
+
+func TestLoadProfilesUsesAgentOSLocalModelEndpointOverride(t *testing.T) {
+	dir := t.TempDir()
+	dependencyConfigPath := filepath.Join(dir, "agent-dependencies.yaml")
+	catalogPath := filepath.Join(dir, "local-model-catalog.yaml")
+	t.Setenv("AGENTOS_LOCAL_MODEL_BASE_URL", "http://10.0.2.101:55262/v1")
+
+	require.NoError(t, os.WriteFile(dependencyConfigPath, []byte(`
+llm_local_small:
+  class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.llm.LLM
+  properties:
+    model: openai/rustic/small
+    conf:
+      base_url: http://localhost:55262/v1
+`), 0o644))
+	require.NoError(t, os.WriteFile(catalogPath, []byte(`
+models:
+  - id: small
+    display_name: Small
+    dependency_key: llm_local_small
+    model_name: openai/rustic/small
+    parameter_count_b: 2
+    quantization: Q4_K_M
+    context_length: 8192
+    min_ram_bytes: 1073741824
+    estimated_memory_bytes: 2147483648
+`), 0o644))
+
+	profiles, err := LoadProfiles(catalogPath, dependencyConfigPath)
+	require.NoError(t, err)
+	require.Len(t, profiles, 1)
+	require.Equal(t, "http://10.0.2.101:55262/v1", profiles[0].BaseURL)
 }
 
 func TestRecommendRanksAndFiltersLocalModels(t *testing.T) {

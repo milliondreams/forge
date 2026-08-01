@@ -51,6 +51,28 @@ func TestE2E_RusticUIEchoLaunchSingleProcess(t *testing.T) {
 	forgeRoot := filepath.Clean(filepath.Join(cwd, "..", ".."))
 
 	server := startSingleProcessForgeServer(t, binPath, forgeRoot, "")
+	runRusticUIEchoFlow(t, server)
+}
+
+func TestE2E_RusticUIEchoAgainstAgentOS(t *testing.T) {
+	base := strings.TrimRight(os.Getenv("FORGE_E2E_AGENTOS_URL"), "/")
+	if base == "" {
+		t.Skip("set FORGE_E2E_AGENTOS_URL to run the Rustic UI Echo flow against AgentOS")
+	}
+	parsed, err := url.Parse(base)
+	require.NoError(t, err)
+	require.Equal(t, "http", parsed.Scheme, "AgentOS E2E URL must use local HTTP")
+	require.NotEmpty(t, parsed.Host)
+
+	runRusticUIEchoFlow(t, &singleProcessForgeServer{
+		publicBase: base,
+		rusticBase: base + "/rustic",
+		wsBase:     "ws://" + parsed.Host,
+	})
+}
+
+func runRusticUIEchoFlow(t *testing.T, server *singleProcessForgeServer) {
+	t.Helper()
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	seededBlueprintID := seedRusticUIEchoCatalog(t, client, server.rusticBase)
@@ -135,11 +157,13 @@ func TestE2E_RusticUIEchoLaunchSingleProcess(t *testing.T) {
 	require.True(t, senderIsEchoAgent(echoMsg), "expected echo response from Echo Agent")
 	require.Contains(t, string(echoMsg), promptText, "expected echoed prompt on usercomms socket")
 
-	assertGuildAgentProcesses(t, server.redisAddr, guildID, []string{
-		guildID + "#manager_agent",
-		asString(t, echoParticipant["id"], "echo participant id"),
-		asString(t, userParticipant["id"], "user participant id"),
-	})
+	if server.redisAddr != "" {
+		assertGuildAgentProcesses(t, server.redisAddr, guildID, []string{
+			guildID + "#manager_agent",
+			asString(t, echoParticipant["id"], "echo participant id"),
+			asString(t, userParticipant["id"], "user participant id"),
+		})
+	}
 }
 
 // startSingleProcessForgeServer launches a forge server subprocess.

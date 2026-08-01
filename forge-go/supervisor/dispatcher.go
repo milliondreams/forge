@@ -20,9 +20,18 @@ type DispatchingSupervisor struct {
 	processSup    AgentSupervisor
 	dockerSup     AgentSupervisor
 	bwrapSup      AgentSupervisor
+	agentOSMode   bool
 
 	mu        sync.RWMutex
 	ownership map[string]AgentSupervisor
+}
+
+type DispatchingSupervisorOption func(*DispatchingSupervisor)
+
+func WithDispatchingAgentOSMode(enabled bool) DispatchingSupervisorOption {
+	return func(dispatcher *DispatchingSupervisor) {
+		dispatcher.agentOSMode = enabled
+	}
 }
 
 func NewDispatchingSupervisor(
@@ -31,8 +40,9 @@ func NewDispatchingSupervisor(
 	process AgentSupervisor,
 	docker AgentSupervisor,
 	bwrap AgentSupervisor,
+	options ...DispatchingSupervisorOption,
 ) *DispatchingSupervisor {
-	return &DispatchingSupervisor{
+	dispatcher := &DispatchingSupervisor{
 		nodeDefault:   nodeDefault,
 		nodeTransport: nodeTransport,
 		processSup:    process,
@@ -40,6 +50,10 @@ func NewDispatchingSupervisor(
 		bwrapSup:      bwrap,
 		ownership:     make(map[string]AgentSupervisor),
 	}
+	for _, option := range options {
+		option(dispatcher)
+	}
+	return dispatcher
 }
 
 func hasSupervisor(sup AgentSupervisor) bool {
@@ -57,22 +71,43 @@ func hasSupervisor(sup AgentSupervisor) bool {
 }
 
 func (d *DispatchingSupervisor) selectSupervisor(entry *registry.AgentRegistryEntry) (AgentSupervisor, error) {
-	if d.nodeDefault == "docker" && hasSupervisor(d.dockerSup) {
-		return d.dockerSup, nil
+	if d.agentOSMode && isContainerRuntime(entry.Runtime) {
+		return nil, fmt.Errorf("container runtime %q is not permitted in AgentOS mode", entry.Runtime)
 	}
-	if d.nodeDefault == "bwrap" && hasSupervisor(d.bwrapSup) {
-		return d.bwrapSup, nil
-	}
-	if d.nodeDefault == "process" && hasSupervisor(d.processSup) {
-		return d.processSup, nil
+
+	switch d.nodeDefault {
+	case "":
+	case "docker":
+		if hasSupervisor(d.dockerSup) {
+			return d.dockerSup, nil
+		}
+		return nil, fmt.Errorf("required default supervisor docker is unavailable")
+	case "bwrap":
+		if hasSupervisor(d.bwrapSup) {
+			return d.bwrapSup, nil
+		}
+		return nil, fmt.Errorf("required default supervisor bwrap is unavailable")
+	case "process":
+		if hasSupervisor(d.processSup) {
+			return d.processSup, nil
+		}
+		return nil, fmt.Errorf("required default supervisor process is unavailable")
+	default:
+		return nil, fmt.Errorf("unknown default supervisor %q", d.nodeDefault)
 	}
 
 	requested := entry.Runtime
 	if requested == registry.RuntimeDocker && hasSupervisor(d.dockerSup) {
 		return d.dockerSup, nil
 	}
+	if requested == registry.RuntimeDocker {
+		return nil, fmt.Errorf("requested docker supervisor is unavailable")
+	}
 	if requested == "bwrap" && hasSupervisor(d.bwrapSup) {
 		return d.bwrapSup, nil
+	}
+	if requested == "bwrap" {
+		return nil, fmt.Errorf("requested bwrap supervisor is unavailable")
 	}
 
 	if hasSupervisor(d.processSup) {
@@ -80,6 +115,15 @@ func (d *DispatchingSupervisor) selectSupervisor(entry *registry.AgentRegistryEn
 	}
 
 	return nil, fmt.Errorf("no suitable supervisor found for requested runtime: %s", requested)
+}
+
+func isContainerRuntime(runtime registry.RuntimeType) bool {
+	switch strings.ToLower(strings.TrimSpace(string(runtime))) {
+	case "docker", "podman":
+		return true
+	default:
+		return false
+	}
 }
 
 func (d *DispatchingSupervisor) Launch(ctx context.Context, guildID string, agentSpec *protocol.AgentSpec, reg *registry.Registry, env []string) error {

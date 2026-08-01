@@ -30,6 +30,9 @@ func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPushe
 	if err := mergeDependencies(spec, dependencyConfigPath); err != nil {
 		return nil, fmt.Errorf("failed to merge dependencies: %w", err)
 	}
+	if err := applyLocalModelEndpointOverride(spec); err != nil {
+		return nil, fmt.Errorf("failed to apply local model endpoint: %w", err)
+	}
 	if err := ApplyFilesystemGlobalRoot(spec, strings.TrimSpace(os.Getenv(forgeFilesystemGlobalRootEnv))); err != nil {
 		return nil, fmt.Errorf("failed to normalize filesystem dependency: %w", err)
 	}

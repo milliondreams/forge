@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rustic-ai/forge/forge-go/agent"
 	"github.com/rustic-ai/forge/forge-go/forgepath"
@@ -42,6 +43,9 @@ var (
 	serverTelemetrySQLiteBin  string
 	serverTelemetrySQLiteDB   string
 	serverTelemetrySQLitePort int
+	serverAgentOSMode         bool
+	serverAgentOSStateSchema  int
+	serverShutdownTimeout     time.Duration
 )
 
 func init() {
@@ -74,6 +78,9 @@ func init() {
 	ServerCmd.Flags().StringVar(&serverTelemetrySQLiteBin, "otel-sqlite-binary", "", "Path to sqlite-otel binary for desktop_sqlite mode")
 	ServerCmd.Flags().StringVar(&serverTelemetrySQLiteDB, "otel-sqlite-db-path", "", "Path to sqlite-otel SQLite database file")
 	ServerCmd.Flags().IntVar(&serverTelemetrySQLitePort, "otel-sqlite-port", 4318, "Port for sqlite-otel OTLP/HTTP listener")
+	ServerCmd.Flags().BoolVar(&serverAgentOSMode, "agentos-mode", false, "Enable fail-closed AgentOS service and sandbox behavior")
+	ServerCmd.Flags().IntVar(&serverAgentOSStateSchema, "agentos-state-schema", 1, "AgentOS persistent state schema reported by the status endpoint")
+	ServerCmd.Flags().DurationVar(&serverShutdownTimeout, "shutdown-timeout", 20*time.Second, "Maximum graceful server drain time")
 
 	RootCmd.AddCommand(ServerCmd)
 }
@@ -131,6 +138,9 @@ var ServerCmd = &cobra.Command{
 			TelemetrySQLiteBinary:   serverTelemetrySQLiteBin,
 			TelemetrySQLiteDBPath:   serverTelemetrySQLiteDB,
 			TelemetrySQLitePort:     serverTelemetrySQLitePort,
+			AgentOSMode:             serverAgentOSMode,
+			AgentOSStateSchema:      serverAgentOSStateSchema,
+			ShutdownTimeout:         serverShutdownTimeout,
 		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

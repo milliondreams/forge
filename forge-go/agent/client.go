@@ -63,6 +63,10 @@ func deregisterNode(ctx context.Context, serverURL, nodeID string) error {
 }
 
 func StartClient(ctx context.Context, config *ClientConfig) error {
+	if config == nil {
+		return fmt.Errorf("client config is required")
+	}
+	config.AgentOSMode = enableAgentOSFromEnvironment(config.AgentOSMode)
 	log := logging.FromContext(ctx, slog.Default()).With("node_id", config.NodeID)
 
 	if config.CPUs <= 0 {
@@ -160,6 +164,9 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 			nets[i] = strings.TrimSpace(nets[i])
 		}
 		for _, className := range reg.ClassNames() {
+			if config.AgentOSMode && registry.IsSystemAgentClass(className) {
+				continue
+			}
 			_ = reg.InjectNetwork(className, nets)
 		}
 	}
@@ -168,7 +175,18 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to create infra event publisher: %w", err)
 	}
-	supervisorFactory := buildOrgSupervisorFactory(statusStore, config.DefaultSupervisor, config.DefaultTransport, msgBackend, infraPublisher, config.DataDir, config.AttachProcessTree, config.ZMQBridgeMode)
+	var dependencyMaterializer *supervisor.DependencyMaterializer
+	if config.AgentOSMode {
+		dependencyMaterializer, err = supervisor.NewDependencyMaterializerFromEnvironment()
+		if err != nil {
+			return fmt.Errorf("initialize AgentOS dependency materializer: %w", err)
+		}
+		dependencyMaterializer.SetStatusNotify(config.OnDependencyStatus)
+		if config.OnDependencyCache != nil {
+			config.OnDependencyCache(dependencyMaterializer.ClearInactive)
+		}
+	}
+	supervisorFactory := buildOrgSupervisorFactory(statusStore, config.ServerURL, config.RedisURL, config.DefaultSupervisor, config.DefaultTransport, msgBackend, infraPublisher, config.DataDir, config.AttachProcessTree, config.ZMQBridgeMode, config.AgentOSMode, dependencyMaterializer)
 	nodeQueueKey := "forge:control:node:" + config.NodeID
 	queueHandler := control.NewControlQueueHandlerWithQueueFactory(controlPlane, reg, sec, supervisorFactory, nil, nodeQueueKey,
 		control.WithStatusStore(statusStore),
@@ -263,16 +281,28 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	}()
 
 	log.Info("Forge client node registered and ready, awaiting workloads", "node_id", config.NodeID)
+	if config.OnReady != nil {
+		config.OnReady()
+	}
+	if dependencyMaterializer != nil {
+		go dependencyMaterializer.WarmSystem(ctx)
+	}
 
 	<-ctx.Done()
 
 	log.Info("Forge client shutting down.")
 	log.Info("Stopping embedded client workloads before client exit.")
-	queueHandler.Stop()
+	shutdownTimeout := config.ShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 20 * time.Second
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := queueHandler.StopContext(shutdownCtx); err != nil {
+		log.Warn("Embedded client workload drain completed with errors", "error", err)
+	}
 	log.Info("Embedded client workloads stopped.")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	if err := deregisterNode(shutdownCtx, config.ServerURL, config.NodeID); err != nil {
 		log.Warn("Failed to deregister node during shutdown", "error", err)
 	}

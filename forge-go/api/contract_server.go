@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rustic-ai/forge/forge-go/api/contract"
 	"github.com/rustic-ai/forge/forge-go/telemetry"
+	"github.com/rustic-ai/forge/forge-go/version"
 )
 
 var _ contract.ServerInterface = (*Server)(nil)
@@ -26,7 +27,70 @@ func (s *Server) Healthz(c *gin.Context) {
 }
 
 func (s *Server) Readyz(c *gin.Context) {
+	if !s.ready.Load() {
+		s.statusMu.RLock()
+		phase := s.phase
+		err := s.startupErr
+		s.statusMu.RUnlock()
+		response := map[string]string{"status": "not_ready", "phase": phase}
+		if err != nil {
+			response["error"] = err.Error()
+		}
+		ReplyJSON(c.Writer, http.StatusServiceUnavailable, response)
+		return
+	}
 	ReplyJSON(c.Writer, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) AgentOSStatus(c *gin.Context) {
+	s.statusMu.RLock()
+	phase := s.phase
+	startupErr := s.startupErr
+	dependencyStatus := s.dependencyStatus
+	s.statusMu.RUnlock()
+	prerequisites := append([]AgentOSPrerequisite(nil), s.prerequisites...)
+	if prerequisites == nil {
+		prerequisites = []AgentOSPrerequisite{}
+	}
+	response := AgentOSStatusResponse{
+		ContractVersion:   AgentOSStatusContractVersion,
+		AgentOSMode:       s.agentOSMode,
+		Compatible:        agentOSCompatible(s.agentOSMode, s.prerequisites, startupErr),
+		Ready:             s.ready.Load(),
+		Phase:             phase,
+		ForgeVersion:      version.Version,
+		StateSchema:       s.stateSchema,
+		Supervisor:        s.supervisorName,
+		Transport:         s.transportName,
+		Keychain:          s.keychainName,
+		LocalModelBaseURL: s.localModelURL,
+		Prerequisites:     prerequisites,
+		Dependencies:      dependencyStatus,
+	}
+	if startupErr != nil {
+		response.Error = startupErr.Error()
+	}
+	ReplyJSON(c.Writer, http.StatusOK, response)
+}
+
+func (s *Server) ClearAgentOSDependencyCache(c *gin.Context) {
+	s.statusMu.RLock()
+	clear := s.dependencyClear
+	agentOSMode := s.agentOSMode
+	s.statusMu.RUnlock()
+	if !agentOSMode {
+		ReplyJSON(c.Writer, http.StatusNotFound, map[string]string{"error": "AgentOS mode is disabled"})
+		return
+	}
+	if clear == nil {
+		ReplyJSON(c.Writer, http.StatusServiceUnavailable, map[string]string{"error": "dependency materializer is not ready"})
+		return
+	}
+	if err := clear(); err != nil {
+		ReplyJSON(c.Writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (s *Server) GetOpenapiJson(c *gin.Context) {

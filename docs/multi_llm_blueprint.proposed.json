@@ -1,0 +1,371 @@
+{
+  "name": "Multi-LLM Guild",
+  "description": "Compare configured LLM profiles and add approved models dynamically.",
+  "version": "v2-proposed",
+  "author_id": "dummyuserid",
+  "organization_id": null,
+  "category_id": null,
+  "icon": null,
+  "intro_msg": "Choose models for Model 1 and Model 2 when launching. Tag Model 1 or Model 2 to ask that model a question. Tag User Input Analyser with the name of an approved dynamic model to add it to the guild.",
+  "tags": [
+    "llm",
+    "comparison"
+  ],
+  "commands": [],
+  "starter_prompts": [
+    "Compare the same question using @Model 1 and @Model 2.",
+    "@User Input Analyser add qwen-2b."
+  ],
+  "exposure": "private",
+  "spec": {
+    "name": "Multi-LLM Guild",
+    "description": "Compare configured LLM profiles and add approved models dynamically.",
+    "properties": {},
+    "configuration_schema": {
+      "type": "object",
+      "properties": {
+        "analyser_model": {
+          "type": "string",
+          "title": "User Input Analyser model",
+          "description": "LLM profile used to extract requested dynamic model names.",
+          "x-rustic-dependency": {
+            "selection": "single",
+            "required_type": "rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM",
+            "filters": {
+              "capabilities": [
+                "chat"
+              ]
+            },
+            "target": {
+              "kind": "agent_dependency",
+              "agent_id": "classifier_agent",
+              "dependency_key": "llm"
+            }
+          }
+        },
+        "model_1": {
+          "type": "string",
+          "title": "Model 1",
+          "description": "LLM profile used by Model 1.",
+          "x-rustic-dependency": {
+            "selection": "single",
+            "required_type": "rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM",
+            "filters": {
+              "capabilities": [
+                "chat"
+              ]
+            },
+            "target": {
+              "kind": "agent_dependency",
+              "agent_id": "model-agent-1",
+              "dependency_key": "llm"
+            }
+          }
+        },
+        "model_2": {
+          "type": "string",
+          "title": "Model 2",
+          "description": "LLM profile used by Model 2.",
+          "x-rustic-dependency": {
+            "selection": "single",
+            "required_type": "rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM",
+            "filters": {
+              "capabilities": [
+                "chat"
+              ]
+            },
+            "target": {
+              "kind": "agent_dependency",
+              "agent_id": "model-agent-2",
+              "dependency_key": "llm"
+            }
+          }
+        },
+        "dynamic_models": {
+          "type": "array",
+          "title": "Models available to add later",
+          "description": "Approved LLM profiles that User Input Analyser and SplitterAgent may request at runtime.",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "x-rustic-dependency": {
+            "selection": "multiple",
+            "required_type": "rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM",
+            "filters": {
+              "capabilities": [
+                "chat"
+              ]
+            },
+            "target": {
+              "kind": "runtime_catalog",
+              "catalog_key": "dynamic_models",
+              "dependency_key": "llm"
+            }
+          }
+        }
+      },
+      "required": [
+        "analyser_model",
+        "model_1",
+        "model_2",
+        "dynamic_models"
+      ],
+      "additionalProperties": false
+    },
+    "configuration": {
+      "analyser_model": "llm_local_qwen3_5_0_8b",
+      "model_1": "llm_local_qwen3_5_0_8b",
+      "model_2": "llm_local_qwen3_5_2b",
+      "dynamic_models": [
+        "llm_local_qwen3_5_0_8b",
+        "llm_local_qwen3_5_2b",
+        "llm_local_qwen3_5_4b"
+      ]
+    },
+    "dependency_map": {},
+    "agents": [
+      {
+        "id": "classifier_agent",
+        "name": "User Input Analyser",
+        "description": "Extracts requested model names for dynamic agent launch.",
+        "class_name": "rustic_ai.llm_agent.llm_agent.LLMAgent",
+        "additional_topics": [
+          "CLASSIFY"
+        ],
+        "properties": {
+          "request_preprocessors": [],
+          "llm_request_wrappers": [],
+          "response_postprocessors": [],
+          "max_retries": 0,
+          "default_system_prompt": "Extract the LLM model names mentioned in the user's request. Return only the names as a comma-separated string with no added provider prefix. Preserve each requested name exactly. Example input: @User Input Analyser add gpt-5.4 and qwen-2b. Example output: gpt-5.4,qwen-2b",
+          "system_prompt_generator": null,
+          "send_response": true
+        },
+        "listen_to_default_topic": false,
+        "act_only_when_tagged": true,
+        "predicates": {},
+        "dependency_map": {},
+        "additional_dependencies": [],
+        "resources": {
+          "num_cpus": null,
+          "num_gpus": null,
+          "custom_resources": {}
+        },
+        "qos": {
+          "timeout": null,
+          "retry_count": null,
+          "latency": null
+        }
+      },
+      {
+        "id": "splitter-agent",
+        "name": "Agent Launch Processor",
+        "description": "Splits extracted model names into dependency-aware agent launch requests.",
+        "class_name": "rustic_ai.core.agents.eip.splitter_agent.SplitterAgent",
+        "additional_topics": [
+          "SPLIT"
+        ],
+        "properties": {
+          "splitter": {
+            "split_type": "jsonata",
+            "expression": "($map($filter($split($.text, ','), function($v){$length($trim($v)) > 0}), function($v){($selector := $trim($v); {\"agent_spec\": {\"name\": \"Dynamic Model\", \"description\": \"A dynamically selected LLM agent\", \"class_name\": \"rustic_ai.llm_agent.llm_agent.LLMAgent\", \"additional_topics\": [], \"properties\": {\"request_preprocessors\": [], \"llm_request_wrappers\": [], \"response_postprocessors\": [], \"max_retries\": 0, \"default_system_prompt\": \"Answer the user's request clearly. Identify yourself by model name when useful.\", \"system_prompt_generator\": null, \"send_response\": true}, \"listen_to_default_topic\": true, \"act_only_when_tagged\": true, \"predicates\": {}, \"dependency_map\": {}, \"additional_dependencies\": [], \"resources\": {\"num_cpus\": null, \"num_gpus\": null, \"custom_resources\": {}}, \"qos\": {\"timeout\": null, \"retry_count\": null, \"latency\": null}}, \"dependency_selections\": {\"llm\": {\"catalog_key\": \"dynamic_models\", \"selector\": $selector}}})}))"
+          },
+          "format_selector": {
+            "strategy": "fixed",
+            "fixed_format": "rustic_ai.core.agents.system.models.AgentLaunchRequest"
+          }
+        },
+        "listen_to_default_topic": false,
+        "act_only_when_tagged": false,
+        "predicates": {},
+        "dependency_map": {},
+        "additional_dependencies": [],
+        "resources": {
+          "num_cpus": null,
+          "num_gpus": null,
+          "custom_resources": {}
+        },
+        "qos": {
+          "timeout": null,
+          "retry_count": null,
+          "latency": null
+        }
+      },
+      {
+        "id": "model-agent-1",
+        "name": "Model 1",
+        "description": "First launch-selected LLM responder.",
+        "class_name": "rustic_ai.llm_agent.llm_agent.LLMAgent",
+        "additional_topics": [],
+        "properties": {
+          "request_preprocessors": [],
+          "llm_request_wrappers": [],
+          "response_postprocessors": [],
+          "max_retries": 0,
+          "default_system_prompt": "Answer the user's request clearly. You are Model 1 in a multi-model comparison.",
+          "system_prompt_generator": null,
+          "send_response": true
+        },
+        "listen_to_default_topic": true,
+        "act_only_when_tagged": true,
+        "predicates": {},
+        "dependency_map": {},
+        "additional_dependencies": [],
+        "resources": {
+          "num_cpus": null,
+          "num_gpus": null,
+          "custom_resources": {}
+        },
+        "qos": {
+          "timeout": null,
+          "retry_count": null,
+          "latency": null
+        }
+      },
+      {
+        "id": "model-agent-2",
+        "name": "Model 2",
+        "description": "Second launch-selected LLM responder.",
+        "class_name": "rustic_ai.llm_agent.llm_agent.LLMAgent",
+        "additional_topics": [],
+        "properties": {
+          "request_preprocessors": [],
+          "llm_request_wrappers": [],
+          "response_postprocessors": [],
+          "max_retries": 0,
+          "default_system_prompt": "Answer the user's request clearly. You are Model 2 in a multi-model comparison.",
+          "system_prompt_generator": null,
+          "send_response": true
+        },
+        "listen_to_default_topic": true,
+        "act_only_when_tagged": true,
+        "predicates": {},
+        "dependency_map": {},
+        "additional_dependencies": [],
+        "resources": {
+          "num_cpus": null,
+          "num_gpus": null,
+          "custom_resources": {}
+        },
+        "qos": {
+          "timeout": null,
+          "retry_count": null,
+          "latency": null
+        }
+      }
+    ],
+    "routes": {
+      "steps": [
+        {
+          "agent": null,
+          "agent_type": "rustic_ai.core.agents.utils.user_proxy_agent.UserProxyAgent",
+          "method_name": "unwrap_and_forward_message",
+          "origin_filter": null,
+          "message_format": "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionRequest",
+          "destination": null,
+          "mark_forwarded": false,
+          "route_times": 1,
+          "transformer": {
+            "style": "content_based_router",
+            "expression_type": "jsonata",
+            "handler": "$contains(payload.messages[0].content[0].text, '@User Input Analyser') ? {'topics': 'CLASSIFY', 'recipient_list': [{'id': 'classifier_agent', 'name': 'User Input Analyser'}]} : null"
+          },
+          "agent_state_update": null,
+          "guild_state_update": null,
+          "process_status": null,
+          "reason": null
+        },
+        {
+          "agent": {
+            "id": "classifier_agent",
+            "name": "User Input Analyser"
+          },
+          "agent_type": null,
+          "method_name": null,
+          "origin_filter": null,
+          "message_format": "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionResponse",
+          "destination": null,
+          "mark_forwarded": false,
+          "route_times": 1,
+          "transformer": {
+            "style": "content_based_router",
+            "expression_type": "jsonata",
+            "handler": "({\"topics\": \"SPLIT\", \"format\": \"rustic_ai.core.ui_protocol.types.TextFormat\", \"payload\": {\"text\": payload.choices[0].message.content}})"
+          },
+          "agent_state_update": null,
+          "guild_state_update": null,
+          "process_status": "completed",
+          "reason": null
+        },
+        {
+          "agent": {
+            "id": "splitter-agent",
+            "name": "Agent Launch Processor"
+          },
+          "agent_type": null,
+          "method_name": null,
+          "origin_filter": null,
+          "message_format": "rustic_ai.core.agents.system.models.AgentLaunchRequest",
+          "destination": {
+            "topics": "system_topic",
+            "recipient_list": [],
+            "priority": null
+          },
+          "mark_forwarded": false,
+          "route_times": -1,
+          "transformer": null,
+          "agent_state_update": null,
+          "guild_state_update": null,
+          "process_status": "completed",
+          "reason": null
+        },
+        {
+          "agent": null,
+          "agent_type": "rustic_ai.llm_agent.llm_agent.LLMAgent",
+          "method_name": null,
+          "origin_filter": null,
+          "message_format": "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionResponse",
+          "destination": null,
+          "mark_forwarded": false,
+          "route_times": -1,
+          "transformer": {
+            "style": "content_based_router",
+            "expression_type": "jsonata",
+            "handler": "sender.id = 'classifier_agent' ? null : {'topics': 'user_message_broadcast'}"
+          },
+          "agent_state_update": null,
+          "guild_state_update": null,
+          "process_status": "completed",
+          "reason": null
+        },
+        {
+          "agent": null,
+          "agent_type": "rustic_ai.forge.agents.system.guild_manager_agent.GuildManagerAgent",
+          "method_name": null,
+          "origin_filter": null,
+          "message_format": "rustic_ai.core.agents.system.models.AgentLaunchResponse",
+          "destination": {
+            "topics": "user_message_broadcast",
+            "recipient_list": [],
+            "priority": null
+          },
+          "mark_forwarded": false,
+          "route_times": -1,
+          "transformer": {
+            "style": "simple",
+            "output_format": "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionResponse",
+            "expression_type": "jsonata",
+            "expression": "({\"id\": \"agent-launch-\" & $.agent_id, \"created\": $floor($millis() / 1000), \"model\": \"forge-guild-manager\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"Added model agent: \" & $.agent_id}}]})"
+          },
+          "agent_state_update": null,
+          "guild_state_update": null,
+          "process_status": "completed",
+          "reason": null
+        }
+      ]
+    },
+    "gateway": null
+  }
+}
