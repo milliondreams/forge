@@ -176,7 +176,12 @@ func (s *Server) handleDeleteSecret() http.HandlerFunc {
 			ReplyError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		if !s.secretManager.Delete(orgID, name) {
+		deleted, err := s.secretManager.Delete(orgID, name)
+		if err != nil {
+			ReplyError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !deleted {
 			ReplyError(w, http.StatusNotFound, "secret not found: "+name)
 			return
 		}

@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rustic-ai/forge/forge-go/api"
 	"github.com/rustic-ai/forge/forge-go/control"
+	"github.com/rustic-ai/forge/forge-go/credentials"
 	"github.com/rustic-ai/forge/forge-go/embed"
 	"github.com/rustic-ai/forge/forge-go/filesystem"
 	"github.com/rustic-ai/forge/forge-go/forgepath"
@@ -40,6 +41,14 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	agentOSPrerequisites, err := inspectAgentOSConfig(cfg)
 	if err != nil {
 		return err
+	}
+	var agentOSVault *credentials.Vault
+	if cfg.AgentOSMode {
+		agentOSVault, err = credentials.OpenVault(strings.TrimSpace(os.Getenv(credentials.AgentOSDirectoryEnv)))
+		if err != nil {
+			return fmt.Errorf("initialize AgentOS credential vault: %w", err)
+		}
+		defer agentOSVault.Close()
 	}
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
@@ -363,7 +372,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 			cfg.ClientDefaultTransport,
 			cfg.ShutdownTimeout,
 			agentOSPrerequisites...,
-		)
+		).WithAgentOSCredentialStore(agentOSVault)
 	}
 	httpServer.
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
@@ -406,6 +415,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 			AttachProcessTree:  true, // Embedded client: attach for reliable cleanup
 			StopAgentsOnExit:   true, // Embedded client: kill agents on server exit
 			OAuthManager:       httpServer.OAuthManager(),
+			SecretProvider:     httpServer.SecretProvider(),
 			AgentOSMode:        cfg.AgentOSMode,
 			ShutdownTimeout:    cfg.ShutdownTimeout,
 			OnReady:            httpServer.MarkReady,

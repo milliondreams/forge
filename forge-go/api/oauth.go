@@ -169,7 +169,11 @@ func (s *Server) handleOAuthDisconnect() http.HandlerFunc {
 			ReplyError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		disconnected := s.oauthManager.Disconnect(orgID, providerID)
+		disconnected, err := s.oauthManager.Disconnect(orgID, providerID)
+		if err != nil {
+			ReplyError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		ReplyJSON(w, http.StatusOK, map[string]interface{}{
 			"providerId":   providerID,
 			"disconnected": disconnected,

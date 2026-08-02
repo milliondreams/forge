@@ -24,13 +24,11 @@ func TestValidateAgentOSConfigRequiresFailClosedDependencies(t *testing.T) {
 	} {
 		t.Setenv(name, filepath.Join(dir, name))
 	}
-	for _, name := range []string{
-		"FORGE_OAUTH_TOKEN_STORE",
-		"FORGE_OAUTH_CLIENT_STORE",
-		"FORGE_SECRET_STORE",
-	} {
-		t.Setenv(name, "keychain")
+	credentialDir := filepath.Join(dir, "credentials")
+	if err := os.Mkdir(credentialDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
+	t.Setenv("FORGE_AGENTOS_CREDENTIALS_DIR", credentialDir)
 	t.Setenv("AGENTOS_LOCAL_MODEL_BASE_URL", "http://10.0.2.101:55262/v1")
 	t.Setenv("FORGE_UV_PYTHON", "3.13")
 	t.Setenv("UV_NO_BUILD", "true")

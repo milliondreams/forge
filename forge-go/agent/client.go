@@ -170,7 +170,10 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 			_ = reg.InjectNetwork(className, nets)
 		}
 	}
-	sec := secrets.DefaultProvider()
+	sec := config.SecretProvider
+	if sec == nil {
+		sec = secrets.DefaultProvider()
+	}
 	infraPublisher, err := infraevents.NewPublisher(msgBackend)
 	if err != nil {
 		return fmt.Errorf("failed to create infra event publisher: %w", err)

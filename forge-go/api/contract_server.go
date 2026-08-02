@@ -62,7 +62,7 @@ func (s *Server) AgentOSStatus(c *gin.Context) {
 		StateSchema:       s.stateSchema,
 		Supervisor:        s.supervisorName,
 		Transport:         s.transportName,
-		Keychain:          s.keychainName,
+		CredentialBackend: s.credentialBackend,
 		LocalModelBaseURL: s.localModelURL,
 		Prerequisites:     prerequisites,
 		Dependencies:      dependencyStatus,

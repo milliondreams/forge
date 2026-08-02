@@ -36,7 +36,11 @@ func TestKeychainSecretStore_CRUDAndList(t *testing.T) {
 		t.Fatalf("expected sorted [A B], got %+v", names)
 	}
 
-	if !s.Delete("org1", "A") {
+	deleted, err := s.Delete("org1", "A")
+	if err != nil {
+		t.Fatalf("Delete A: %v", err)
+	}
+	if !deleted {
 		t.Fatal("expected Delete A to report true")
 	}
 	names, _ = s.List("org1")

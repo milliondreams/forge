@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/rustic-ai/forge/forge-go/forgepath"
@@ -49,6 +50,10 @@ func (s *KeychainClientCredentialsStore) LoadCredentials(providerID string) (*cl
 	return &c, true
 }
 
-func (s *KeychainClientCredentialsStore) DeleteCredentials(providerID string) bool {
-	return keyring.Delete(s.service, clientStoreKey(providerID)) == nil
+func (s *KeychainClientCredentialsStore) DeleteCredentials(providerID string) (bool, error) {
+	err := keyring.Delete(s.service, clientStoreKey(providerID))
+	if errors.Is(err, keyring.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rustic-ai/forge/forge-go/api"
+	"github.com/rustic-ai/forge/forge-go/credentials"
 	"github.com/rustic-ai/forge/forge-go/localmodel"
 )
 
@@ -78,17 +79,11 @@ func inspectAgentOSConfig(cfg *ServerConfig) ([]api.AgentOSPrerequisite, error) 
 		add(item.name, true, filepath.IsAbs(path), item.env+" must be an absolute path")
 	}
 
-	for _, item := range []struct {
-		name string
-		env  string
-	}{
-		{name: "oauth_token_store", env: "FORGE_OAUTH_TOKEN_STORE"},
-		{name: "oauth_client_store", env: "FORGE_OAUTH_CLIENT_STORE"},
-		{name: "secret_store", env: "FORGE_SECRET_STORE"},
-	} {
-		valid := strings.EqualFold(strings.TrimSpace(os.Getenv(item.env)), "keychain")
-		add(item.name, true, valid, item.env+" must equal keychain")
-	}
+	credentialDir := strings.TrimSpace(os.Getenv(credentials.AgentOSDirectoryEnv))
+	credentialInfo, credentialErr := os.Stat(credentialDir)
+	credentialValid := filepath.IsAbs(credentialDir) && credentialErr == nil && credentialInfo.IsDir() && credentialInfo.Mode().Perm() == 0o700
+	add("credential_storage", true, credentialValid, credentials.AgentOSDirectoryEnv+" must name an existing mode-0700 absolute directory")
+	add("credential_backend", true, true, credentials.BackendName)
 
 	add("state_schema", true, cfg.AgentOSStateSchema > 0, "must be positive")
 	add("python_version", true, strings.TrimSpace(os.Getenv("FORGE_UV_PYTHON")) == "3.13", "FORGE_UV_PYTHON must equal 3.13")

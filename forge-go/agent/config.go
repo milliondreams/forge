@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/rustic-ai/forge/forge-go/oauth"
+	"github.com/rustic-ai/forge/forge-go/secrets"
 	"github.com/rustic-ai/forge/forge-go/supervisor"
 )
 
@@ -61,6 +62,7 @@ type ClientConfig struct {
 	AttachProcessTree  bool
 	StopAgentsOnExit   bool
 	OAuthManager       *oauth.Manager
+	SecretProvider     secrets.SecretProvider
 	AgentOSMode        bool
 	ShutdownTimeout    time.Duration
 	OnReady            func()

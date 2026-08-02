@@ -23,7 +23,7 @@ type AgentOSStatusResponse struct {
 	StateSchema       int                         `json:"stateSchema"`
 	Supervisor        string                      `json:"supervisor"`
 	Transport         string                      `json:"transport"`
-	Keychain          string                      `json:"keychain"`
+	CredentialBackend string                      `json:"credentialBackend"`
 	LocalModelBaseURL string                      `json:"localModelBaseURL,omitempty"`
 	Prerequisites     []AgentOSPrerequisite       `json:"prerequisites"`
 	Error             string                      `json:"error,omitempty"`

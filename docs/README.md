@@ -17,6 +17,7 @@ Internal engineering design documents, specifications, and runbooks for Forge. T
 | [Guild Infrastructure Events Proposal](GUILD_INFRA_EVENTS_PROPOSAL.md) | Infrastructure event model for guild lifecycle and control-plane signalling. |
 | [File API Guild Spec Flow](FILE_API_GUILD_SPEC_FLOW.md) | The file API and the spec-to-running-guild flow. |
 | [Desktop Secrets & OAuth Design](DESKTOP_SECRETS_OAUTH_DESIGN.md) | Secret storage/injection, keychain integration, and desktop OAuth flows. |
+| [AgentOS Credential Vault](AGENTOS_CREDENTIAL_VAULT.md) | AgentOS-only encrypted persistence, startup contract, and security boundary. |
 | [Local Model Fit Design](MODEL_FIT_DESIGN.md) | Local model-fit recommendations and runtime capability detection. |
 
 ## Protocols

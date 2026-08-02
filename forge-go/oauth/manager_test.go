@@ -140,7 +140,11 @@ func TestDisconnect_KeepsGlobalDCRClient(t *testing.T) {
 	_ = m.credStore.SaveCredentials("mcp", &clientCredentials{ClientID: "registered-id"})
 	m.SeedToken("org1", "mcp", "tok")
 
-	if !m.Disconnect("org1", "mcp") {
+	disconnected, err := m.Disconnect("org1", "mcp")
+	if err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	if !disconnected {
 		t.Fatal("expected Disconnect to report a removed token")
 	}
 	// Token is gone...

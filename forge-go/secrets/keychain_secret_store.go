@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"sort"
 	"strings"
 
@@ -26,8 +27,12 @@ func (s *KeychainSecretStore) Save(orgID, name, value string) error {
 	return keyring.Set(s.service, SecretStoreKey(orgID, name), value)
 }
 
-func (s *KeychainSecretStore) Delete(orgID, name string) bool {
-	return keyring.Delete(s.service, SecretStoreKey(orgID, name)) == nil
+func (s *KeychainSecretStore) Delete(orgID, name string) (bool, error) {
+	err := keyring.Delete(s.service, SecretStoreKey(orgID, name))
+	if errors.Is(err, keyring.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (s *KeychainSecretStore) Exists(orgID, name string) bool {

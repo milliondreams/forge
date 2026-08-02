@@ -51,7 +51,7 @@ func (m *Manager) Update(orgID, name, value string) error {
 
 // Delete removes a secret. It returns false if no secret with that name exists
 // for the org.
-func (m *Manager) Delete(orgID, name string) bool {
+func (m *Manager) Delete(orgID, name string) (bool, error) {
 	return m.store.Delete(orgID, name)
 }
 

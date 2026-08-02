@@ -18,8 +18,8 @@ func clientStoreKey(providerID string) string {
 // using Dynamic Client Registration (RFC 7591) these are issued by the provider
 // and persisted so they can be reused across reconnects and token refreshes.
 type clientCredentials struct {
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
 	// SecretExpiresAt is when the client_secret expires. Zero means it never
 	// expires (RFC 7591 client_secret_expires_at of 0).
 	SecretExpiresAt time.Time `json:"secret_expires_at"`
@@ -38,7 +38,7 @@ func (c *clientCredentials) expired() bool {
 type ClientCredentialsStore interface {
 	SaveCredentials(providerID string, c *clientCredentials) error
 	LoadCredentials(providerID string) (*clientCredentials, bool)
-	DeleteCredentials(providerID string) bool
+	DeleteCredentials(providerID string) (bool, error)
 }
 
 // NewClientCredentialsStore creates a ClientCredentialsStore by name, matching
@@ -79,11 +79,11 @@ func (s *InMemoryClientCredentialsStore) LoadCredentials(providerID string) (*cl
 	return c, ok
 }
 
-func (s *InMemoryClientCredentialsStore) DeleteCredentials(providerID string) bool {
+func (s *InMemoryClientCredentialsStore) DeleteCredentials(providerID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := clientStoreKey(providerID)
 	_, ok := s.creds[key]
 	delete(s.creds, key)
-	return ok
+	return ok, nil
 }

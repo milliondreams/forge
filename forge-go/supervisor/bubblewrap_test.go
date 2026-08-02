@@ -286,13 +286,14 @@ func TestAgentOSBubblewrapEnvironmentIsAllowlisted(t *testing.T) {
 		"FORGE_AGENT_TRANSPORT=supervisor-zmq",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
 		"FORGE_DATABASE_URL=sqlite:///var/lib/agentos/forge.db",
+		"FORGE_AGENTOS_CREDENTIALS_DIR=/var/lib/agentos/credentials",
 		"LD_PRELOAD=/tmp/inject.so",
 	}, true)
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "FORGE_AGENT_TRANSPORT=supervisor-zmq") {
 		t.Fatalf("required scoped env missing: %v", env)
 	}
-	for _, denied := range []string{"DBUS_SESSION_BUS_ADDRESS", "FORGE_DATABASE_URL", "LD_PRELOAD"} {
+	for _, denied := range []string{"DBUS_SESSION_BUS_ADDRESS", "FORGE_DATABASE_URL", "FORGE_AGENTOS_CREDENTIALS_DIR", "LD_PRELOAD"} {
 		if strings.Contains(joined, denied) {
 			t.Fatalf("denied environment %s leaked: %v", denied, env)
 		}

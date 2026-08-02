@@ -420,7 +420,7 @@ func (m *Manager) SeedToken(orgID, providerID, accessToken string) {
 // disconnecting one org must not break others. The client persists for the
 // deployment's lifetime and is re-registered automatically only when its
 // client_secret expires (see registerIfNeeded).
-func (m *Manager) Disconnect(orgID, providerID string) bool {
+func (m *Manager) Disconnect(orgID, providerID string) (bool, error) {
 	return m.store.Delete(orgID, providerID)
 }
 

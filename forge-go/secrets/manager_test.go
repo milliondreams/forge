@@ -60,10 +60,18 @@ func TestManager_Delete(t *testing.T) {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	if !m.Delete("org1", "K") {
+	deleted, err := m.Delete("org1", "K")
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if !deleted {
 		t.Fatal("expected Delete to report true")
 	}
-	if m.Delete("org1", "K") {
+	deleted, err = m.Delete("org1", "K")
+	if err != nil {
+		t.Fatalf("second Delete: %v", err)
+	}
+	if deleted {
 		t.Fatal("expected second Delete to report false")
 	}
 	if m.Exists("org1", "K") {

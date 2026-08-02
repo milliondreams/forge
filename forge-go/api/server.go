@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +13,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rustic-ai/forge/forge-go/agentoscredential"
 	"github.com/rustic-ai/forge/forge-go/api/contract"
+	"github.com/rustic-ai/forge/forge-go/credentials"
 	"github.com/rustic-ai/forge/forge-go/filesystem"
 	"github.com/rustic-ai/forge/forge-go/forgepath"
 	"github.com/rustic-ai/forge/forge-go/gateway"
@@ -28,33 +31,35 @@ import (
 )
 
 type Server struct {
-	store            store.Store
-	statusStore      supervisor.AgentStatusStore
-	controlPusher    protocol.ControlPusher
-	msgClient        messaging.Backend
-	infraPublisher   *infraevents.Publisher
-	fileStore        *filesystem.LocalFileStore
-	localUI          *localUIState
-	observeService   *observeService
-	modelFit         *modelFitService
-	oauthManager     *oauth.Manager
-	secretManager    *secrets.Manager
-	listenAddr       string
-	server           *http.Server
-	ready            atomic.Bool
-	statusMu         sync.RWMutex
-	phase            string
-	startupErr       error
-	agentOSMode      bool
-	stateSchema      int
-	supervisorName   string
-	transportName    string
-	keychainName     string
-	localModelURL    string
-	prerequisites    []AgentOSPrerequisite
-	shutdownTimeout  time.Duration
-	dependencyStatus supervisor.DependencyStatus
-	dependencyClear  func() error
+	store             store.Store
+	statusStore       supervisor.AgentStatusStore
+	controlPusher     protocol.ControlPusher
+	msgClient         messaging.Backend
+	infraPublisher    *infraevents.Publisher
+	fileStore         *filesystem.LocalFileStore
+	localUI           *localUIState
+	observeService    *observeService
+	modelFit          *modelFitService
+	oauthManager      *oauth.Manager
+	secretManager     *secrets.Manager
+	listenAddr        string
+	server            *http.Server
+	ready             atomic.Bool
+	statusMu          sync.RWMutex
+	phase             string
+	startupErr        error
+	agentOSMode       bool
+	stateSchema       int
+	supervisorName    string
+	transportName     string
+	credentialBackend string
+	credentialStore   credentials.Store
+	secretProvider    secrets.SecretProvider
+	localModelURL     string
+	prerequisites     []AgentOSPrerequisite
+	shutdownTimeout   time.Duration
+	dependencyStatus  supervisor.DependencyStatus
+	dependencyClear   func() error
 }
 
 func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlPusher protocol.ControlPusher, mc messaging.Backend, fs *filesystem.LocalFileStore, listenAddr string) *Server {
@@ -81,7 +86,7 @@ func (s *Server) WithAgentOS(stateSchema int, supervisorName, transportName stri
 	s.stateSchema = stateSchema
 	s.supervisorName = supervisorName
 	s.transportName = transportName
-	s.keychainName = "secret-service"
+	s.credentialBackend = credentials.BackendName
 	s.prerequisites = append([]AgentOSPrerequisite(nil), prerequisites...)
 	for _, prerequisite := range prerequisites {
 		if prerequisite.Name == "local_model_endpoint" && prerequisite.Satisfied {
@@ -92,6 +97,13 @@ func (s *Server) WithAgentOS(stateSchema int, supervisorName, transportName stri
 	s.shutdownTimeout = shutdownTimeout
 	s.setPhase("starting")
 	s.dependencyStatus = supervisor.DependencyStatus{Phase: "pending"}
+	return s
+}
+
+// WithAgentOSCredentialStore installs the Forge-owned vault used only by
+// AgentOS. Native servers continue selecting their existing stores.
+func (s *Server) WithAgentOSCredentialStore(store credentials.Store) *Server {
+	s.credentialStore = store
 	return s
 }
 
@@ -129,10 +141,13 @@ func (s *Server) MarkReady() {
 	s.setPhase("ready")
 }
 
-// WithOAuth initialises OAuth support. Both store backends are selected from the
-// environment: FORGE_OAUTH_TOKEN_STORE for tokens and FORGE_OAUTH_CLIENT_STORE for
-// DCR client credentials, each "memory" (default) or "keychain".
+// WithOAuth initialises OAuth support. Native mode keeps selecting both stores
+// from the environment. AgentOS uses its injected Forge-owned credential vault.
 func (s *Server) WithOAuth() *Server {
+	if s.agentOSMode && s.credentialStore == nil {
+		s.setStartupError(errors.New("AgentOS credential vault is not configured"))
+		return s
+	}
 	kind := os.Getenv("FORGE_OAUTH_TOKEN_STORE")
 	cfg, err := oauth.LoadProvidersConfig(forgepath.OAuthProvidersConfigPath())
 	if err != nil {
@@ -143,7 +158,12 @@ func (s *Server) WithOAuth() *Server {
 		fmt.Printf("WARN: failed to load OAuth providers config: %v\n", err)
 		return s
 	}
-	store, err := oauth.NewTokenStore(kind)
+	var store oauth.TokenStore
+	if s.agentOSMode && s.credentialStore != nil {
+		store = oauth.NewCredentialTokenStore(s.credentialStore)
+	} else {
+		store, err = oauth.NewTokenStore(kind)
+	}
 	if err != nil {
 		if s.agentOSMode && strings.EqualFold(kind, "keychain") {
 			s.setStartupError(fmt.Errorf("initialize OAuth token store: %w", err))
@@ -153,7 +173,12 @@ func (s *Server) WithOAuth() *Server {
 		store, _ = oauth.NewTokenStore("memory")
 	}
 	// Client credentials use their own backend (empty -> in-memory).
-	credStore, err := oauth.NewClientCredentialsStore(os.Getenv("FORGE_OAUTH_CLIENT_STORE"))
+	var credStore oauth.ClientCredentialsStore
+	if s.agentOSMode && s.credentialStore != nil {
+		credStore = oauth.NewCredentialClientCredentialsStore(s.credentialStore)
+	} else {
+		credStore, err = oauth.NewClientCredentialsStore(os.Getenv("FORGE_OAUTH_CLIENT_STORE"))
+	}
 	if err != nil {
 		if s.agentOSMode && strings.EqualFold(os.Getenv("FORGE_OAUTH_CLIENT_STORE"), "keychain") {
 			s.setStartupError(fmt.Errorf("initialize OAuth client store: %w", err))
@@ -168,6 +193,9 @@ func (s *Server) WithOAuth() *Server {
 	s.oauthManager = oauth.NewManagerWithStores(cfg, store, credStore,
 		oauth.WithDynamicClient(os.Getenv("FORGE_OAUTH_CLIENT_NAME"), os.Getenv("FORGE_OAUTH_CLIENT_URI")))
 	keychain.SetOAuthManager(s.oauthManager)
+	if s.agentOSMode && s.credentialStore != nil {
+		s.secretProvider = agentoscredential.NewProvider(s.credentialStore, s.oauthManager)
+	}
 	return s
 }
 
@@ -176,13 +204,20 @@ func (s *Server) OAuthManager() *oauth.Manager {
 	return s.oauthManager
 }
 
-// WithSecrets initialises org-scoped secret management. The store backend is
-// selected from FORGE_SECRET_STORE ("memory" (default) or "keychain"), mirroring
-// the OAuth token store. With the keychain backend, secrets are stored under
-// "secret:orgID|name" and resolve through the keychain SecretProvider directly —
-// no delegation is needed since the stored value is the secret itself.
+// WithSecrets initialises org-scoped secret management. Native mode keeps its
+// FORGE_SECRET_STORE selection; AgentOS uses its injected credential vault.
 func (s *Server) WithSecrets() *Server {
-	store, err := secrets.NewSecretStore(os.Getenv("FORGE_SECRET_STORE"))
+	if s.agentOSMode && s.credentialStore == nil {
+		s.setStartupError(errors.New("AgentOS credential vault is not configured"))
+		return s
+	}
+	var store secrets.SecretStore
+	var err error
+	if s.agentOSMode && s.credentialStore != nil {
+		store = secrets.NewCredentialSecretStore(s.credentialStore)
+	} else {
+		store, err = secrets.NewSecretStore(os.Getenv("FORGE_SECRET_STORE"))
+	}
 	if err != nil {
 		if s.agentOSMode && strings.EqualFold(os.Getenv("FORGE_SECRET_STORE"), "keychain") {
 			s.setStartupError(fmt.Errorf("initialize secret store: %w", err))
@@ -199,6 +234,10 @@ func (s *Server) WithSecrets() *Server {
 // if secret management is not configured.
 func (s *Server) SecretManager() *secrets.Manager {
 	return s.secretManager
+}
+
+func (s *Server) SecretProvider() secrets.SecretProvider {
+	return s.secretProvider
 }
 
 func (s *Server) WithObservability(mode, sqliteDBPath string) *Server {

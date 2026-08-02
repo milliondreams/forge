@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -102,6 +103,10 @@ func (s *KeychainTokenStore) Load(orgID, providerID string) (*tokenEntry, bool) 
 	return fromStoredEntry(&se), true
 }
 
-func (s *KeychainTokenStore) Delete(orgID, providerID string) bool {
-	return keyring.Delete(s.service, StoreKey(orgID, providerID)) == nil
+func (s *KeychainTokenStore) Delete(orgID, providerID string) (bool, error) {
+	err := keyring.Delete(s.service, StoreKey(orgID, providerID))
+	if errors.Is(err, keyring.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }

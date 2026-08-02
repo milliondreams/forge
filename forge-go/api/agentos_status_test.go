@@ -49,6 +49,9 @@ func TestReadyzTracksLifecycleAndAgentOSStatus(t *testing.T) {
 	if status.Supervisor != "bwrap" || status.LocalModelBaseURL != "http://10.0.2.101:55262/v1" {
 		t.Fatalf("unexpected AgentOS runtime contract: %+v", status)
 	}
+	if status.CredentialBackend != "forge-vault" {
+		t.Fatalf("credential backend = %q, want forge-vault", status.CredentialBackend)
+	}
 	if len(status.Prerequisites) != 2 {
 		t.Fatalf("prerequisites = %d, want 2", len(status.Prerequisites))
 	}
@@ -83,6 +86,22 @@ func TestAgentOSCompatibilityAllowsUnavailableOptionalCapability(t *testing.T) {
 	}
 	if !agentOSCompatible(true, prerequisites, nil) {
 		t.Fatal("optional local-model capability made AgentOS incompatible")
+	}
+}
+
+func TestAgentOSCredentialVaultIsRequired(t *testing.T) {
+	server := NewServer(nil, nil, nil, nil, nil, "127.0.0.1:0").
+		WithAgentOS(1, "bwrap", "supervisor-zmq", time.Second).
+		WithOAuth()
+	if server.startupErr == nil {
+		t.Fatal("AgentOS OAuth initialization accepted a missing credential vault")
+	}
+
+	server = NewServer(nil, nil, nil, nil, nil, "127.0.0.1:0").
+		WithAgentOS(1, "bwrap", "supervisor-zmq", time.Second).
+		WithSecrets()
+	if server.startupErr == nil {
+		t.Fatal("AgentOS secret initialization accepted a missing credential vault")
 	}
 }
 

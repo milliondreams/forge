@@ -42,7 +42,7 @@ type SecretStore interface {
 	// Save creates or overwrites the secret's value. Create/update semantics
 	// (conflict vs not-found) are enforced by the Manager via Exists.
 	Save(orgID, name, value string) error
-	Delete(orgID, name string) bool
+	Delete(orgID, name string) (bool, error)
 	Exists(orgID, name string) bool
 	// List returns the names of the org's secrets, sorted. The error return lets
 	// backends report enumeration failures; current backends do not fail.
@@ -82,13 +82,13 @@ func (s *InMemorySecretStore) Save(orgID, name, value string) error {
 	return nil
 }
 
-func (s *InMemorySecretStore) Delete(orgID, name string) bool {
+func (s *InMemorySecretStore) Delete(orgID, name string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := SecretStoreKey(orgID, name)
 	_, ok := s.secrets[key]
 	delete(s.secrets, key)
-	return ok
+	return ok, nil
 }
 
 func (s *InMemorySecretStore) Exists(orgID, name string) bool {

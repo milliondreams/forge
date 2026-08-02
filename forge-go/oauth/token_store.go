@@ -10,7 +10,7 @@ import (
 type TokenStore interface {
 	Save(orgID, providerID string, entry *tokenEntry) error
 	Load(orgID, providerID string) (*tokenEntry, bool)
-	Delete(orgID, providerID string) bool
+	Delete(orgID, providerID string) (bool, error)
 }
 
 // NewTokenStore creates a TokenStore by name. Supported backends:
@@ -53,11 +53,11 @@ func (s *InMemoryTokenStore) Load(orgID, providerID string) (*tokenEntry, bool) 
 	return e, ok
 }
 
-func (s *InMemoryTokenStore) Delete(orgID, providerID string) bool {
+func (s *InMemoryTokenStore) Delete(orgID, providerID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := StoreKey(orgID, providerID)
 	_, ok := s.tokens[key]
 	delete(s.tokens, key)
-	return ok
+	return ok, nil
 }
