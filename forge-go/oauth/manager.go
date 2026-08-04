@@ -254,6 +254,14 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 	}
 
 	var authOpts []oauth2.AuthCodeOption
+	// Provider-specific extras first, so the generated PKCE and resource options
+	// below still win on any collision that got past validation.
+	for k, v := range cfg.authParams() {
+		if v == "" {
+			continue // an empty value switches a built-in default off
+		}
+		authOpts = append(authOpts, oauth2.SetAuthURLParam(k, v))
+	}
 	if usePKCE {
 		authOpts = append(authOpts, oauth2.S256ChallengeOption(verifier))
 	}
@@ -362,7 +370,8 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 }
 
 // GetAccessToken returns a valid access token for the provider, refreshing it
-// if it expires within 60 seconds.
+// if it expires within 60 seconds. A token with no expiry never expires and is
+// returned as-is.
 func (m *Manager) GetAccessToken(ctx context.Context, orgID, providerID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -372,7 +381,12 @@ func (m *Manager) GetAccessToken(ctx context.Context, orgID, providerID string) 
 		return "", fmt.Errorf("provider %q not connected for org %q: %w", providerID, orgID, ErrNotConnected)
 	}
 
-	if entry.token.Valid() && time.Until(entry.token.Expiry) > 60*time.Second {
+	// A zero Expiry means "never expires" (Token.Valid agrees), but time.Until
+	// on it is hugely negative, so it has to be checked separately or a
+	// non-expiring token — a Slack bot token, a classic GitHub token — would
+	// take the refresh path on every single call and rewrite the keychain entry
+	// for nothing.
+	if entry.token.Valid() && (entry.token.Expiry.IsZero() || time.Until(entry.token.Expiry) > 60*time.Second) {
 		return entry.token.AccessToken, nil
 	}
 

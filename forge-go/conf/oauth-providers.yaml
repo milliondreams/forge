@@ -13,6 +13,39 @@
 # use_pkce: controls PKCE (S256 code challenge). Defaults to true. Set to
 # false for providers that do not support it.
 #
+# prompt: consent is sent on every provider's authorization request by default.
+# Servers that follow OIDC Core §11 strictly need it to issue a refresh token;
+# the rest ignore it. Override or disable it via auth_params below.
+#
+# auth_params: extra parameters added to the authorization request only (never
+# the token exchange or refresh). Needed because providers disagree on how to
+# ask for a refresh token, and getting it wrong fails silently — you connect
+# successfully and get an empty refresh_token:
+#
+#   Authorization servers that follow OIDC Core §11 strictly
+#     scopes must include offline_access, and the request must carry
+#     prompt: consent (the default). Without the prompt the scope is stripped
+#     from the grant with no error and no refresh token is issued.
+#   Google
+#     ignores offline_access; wants access_type: offline. It also returns a
+#     refresh token only on the FIRST grant per (account, client_id) — a grant
+#     Google remembers long after Forge's stored token is gone — so the
+#     prompt: consent default is what makes reconnects work.
+#   Microsoft Entra v2.0, Okta, Auth0
+#     offline_access in scopes is enough; the prompt is harmless.
+#   GitHub, Slack
+#     neither applies. See the entries below.
+#
+# A parameter with an empty value is omitted, which is how you switch off a
+# default — set prompt: "" for a provider that rejects the parameter.
+# Parameters the flow generates itself (state, code_challenge, redirect_uri,
+# scope, resource, ...) are rejected at startup.
+#
+# Note the prompt default only earns you a refresh token in combination with
+# offline_access in scopes, which stays explicit per provider: a server may
+# reject an unknown scope outright (RFC 6749 §3.3), and turning "connects but
+# cannot refresh" into "cannot connect" would be the worst failure.
+#
 # resource_url: the canonical URI of the protected resource behind this
 # provider (e.g. an MCP server endpoint). When set, Forge sends it as the
 # RFC 8707 `resource` parameter on the authorization, token and refresh
@@ -32,6 +65,9 @@
 # editing this file.
 
 providers:
+#  # Classic GitHub OAuth apps issue a non-expiring access token and no refresh
+#  # token at all, so there is nothing to configure here. Refresh tokens require
+#  # a GitHub App with "expiring user tokens" enabled.
 #  github:
 #    display_name: GitHub
 #    description: Access GitHub repositories and user profile for code reading and pull request automation.
@@ -39,7 +75,14 @@ providers:
 #  google-drive:
 #    display_name: Google Drive
 #    description: Read and write files in Google Drive for document-based workflows.
+#    scopes: [https://www.googleapis.com/auth/drive]
+#    # Google ignores offline_access and needs access_type for a refresh token.
+#    # The prompt: consent default is what makes reconnects get one too.
+#    auth_params:
+#      access_type: offline
 #
+#  # Slack has no offline_access and no prompt. Refresh tokens arrive only if
+#  # token rotation is enabled on the Slack app itself.
 #  slack:
 #    display_name: Slack
 #    description: Send messages and read channel history to integrate agents with your Slack workspace.
@@ -54,6 +97,10 @@ providers:
 #   use_pkce: false
 #   # Optional: ask for a token restricted to this resource (RFC 8707).
 #   resource_url: https://api.example.com
+#   # Optional: extra authorization-request parameters. Setting prompt here
+#   # overrides the default; prompt: "" sends none.
+#   auth_params:
+#     access_type: offline
 #
 #   Dynamic Client Registration example (e.g. a remote MCP server):
 #  notion-mcp:
@@ -61,3 +108,7 @@ providers:
 #    description: Connect to the Notion MCP server.
 #    resource_url: https://mcp.notion.com/mcp
 #    use_dcrp: true
+#    # prompt: consent is applied automatically, but it only earns a refresh
+#    # token in combination with this scope.
+#    scopes: [offline_access]
+

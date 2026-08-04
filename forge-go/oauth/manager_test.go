@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -119,6 +120,111 @@ func TestGetAuthURL_DCRDiscoversAndUsesRegisteredClient(t *testing.T) {
 	}
 }
 
+func TestGetAuthURL_SendsAuthParams(t *testing.T) {
+	cfg := &ProvidersConfig{
+		Providers: map[string]ProviderConfig{
+			// A server that follows OIDC Core §11 strictly: without
+			// prompt=consent it drops offline_access and issues no refresh token.
+			"strict-oidc": {
+				AuthURL:     "https://login.example.com/oidc/auth",
+				TokenURL:    "https://login.example.com/oidc/token",
+				Scopes:      []string{"openid", "offline_access"},
+				ResourceURL: "https://api.example.com",
+				AuthParams:  map[string]string{"prompt": "consent"},
+			},
+			// Google's dialect: access_type instead of offline_access, on top of
+			// the default prompt.
+			"google": {
+				AuthURL:    "https://example.com/oauth/authorize",
+				TokenURL:   "https://example.com/oauth/token",
+				AuthParams: map[string]string{"access_type": "offline"},
+			},
+			"plain": {
+				AuthURL:  "https://example.com/oauth/authorize",
+				TokenURL: "https://example.com/oauth/token",
+			},
+			"empty value": {
+				AuthURL:    "https://example.com/oauth/authorize",
+				TokenURL:   "https://example.com/oauth/token",
+				AuthParams: map[string]string{"prompt": ""},
+			},
+		},
+	}
+	m := NewManager(cfg)
+	for id := range cfg.Providers {
+		m.CheckAndUpdateProvider(id, nil)
+	}
+
+	t.Run("params are sent and do not disturb the generated ones", func(t *testing.T) {
+		authURL, state, err := m.GetAuthURL(context.Background(), "org1", "strict-oidc", "cid", "csecret", "https://example.com/cb")
+		if err != nil {
+			t.Fatalf("GetAuthURL failed: %v", err)
+		}
+		if got := queryParam(t, authURL, "prompt"); got != "consent" {
+			t.Errorf("prompt = %q, want %q", got, "consent")
+		}
+		// auth_params is applied before PKCE and resource, so the generated
+		// values must all still be intact and correct.
+		if got := queryParam(t, authURL, "state"); got != state {
+			t.Errorf("state = %q, want the returned state %q", got, state)
+		}
+		if queryParam(t, authURL, "code_challenge") == "" {
+			t.Error("code_challenge missing")
+		}
+		if got := queryParam(t, authURL, "code_challenge_method"); got != "S256" {
+			t.Errorf("code_challenge_method = %q, want S256", got)
+		}
+		if got := queryParam(t, authURL, "resource"); got != "https://api.example.com" {
+			t.Errorf("resource = %q", got)
+		}
+		if got := queryParam(t, authURL, "redirect_uri"); got != "https://example.com/cb" {
+			t.Errorf("redirect_uri = %q", got)
+		}
+		if got := queryParam(t, authURL, "scope"); got != "openid offline_access" {
+			t.Errorf("scope = %q", got)
+		}
+	})
+
+	t.Run("configured params sit alongside the default prompt", func(t *testing.T) {
+		authURL, _, err := m.GetAuthURL(context.Background(), "org1", "google", "cid", "csecret", "https://example.com/cb")
+		if err != nil {
+			t.Fatalf("GetAuthURL failed: %v", err)
+		}
+		if got := queryParam(t, authURL, "access_type"); got != "offline" {
+			t.Errorf("access_type = %q, want offline", got)
+		}
+		if got := queryParam(t, authURL, "prompt"); got != "consent" {
+			t.Errorf("prompt = %q, want consent", got)
+		}
+	})
+
+	t.Run("no auth_params still gets the default prompt", func(t *testing.T) {
+		authURL, _, err := m.GetAuthURL(context.Background(), "org1", "plain", "cid", "csecret", "https://example.com/cb")
+		if err != nil {
+			t.Fatalf("GetAuthURL failed: %v", err)
+		}
+		if got := queryParam(t, authURL, "prompt"); got != "consent" {
+			t.Errorf("prompt = %q, want consent", got)
+		}
+	})
+
+	t.Run("empty value opts out and is omitted entirely", func(t *testing.T) {
+		authURL, _, err := m.GetAuthURL(context.Background(), "org1", "empty value", "cid", "csecret", "https://example.com/cb")
+		if err != nil {
+			t.Fatalf("GetAuthURL failed: %v", err)
+		}
+		u, err := url.Parse(authURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Not just empty — the key must not be present at all, otherwise the
+		// provider receives a meaningless "prompt=".
+		if _, present := u.Query()["prompt"]; present {
+			t.Error("prompt should be absent, not sent empty")
+		}
+	})
+}
+
 func TestCallbackURL(t *testing.T) {
 	base := "https://forge.example.com/api"
 	// A single constant callback for every provider (flow identified by state).
@@ -178,6 +284,151 @@ func TestLoadProvidersConfig_RejectsInvalidResourceConfig(t *testing.T) {
 				t.Errorf("expected validation error for %q, got nil", name)
 			}
 		})
+	}
+}
+
+// auth_params must not be able to overwrite what the flow generates. AuthCodeURL
+// applies AuthCodeOptions after its own parameters, so an unchecked entry would
+// win over the real state or code_challenge.
+func TestLoadProvidersConfig_RejectsReservedAuthParams(t *testing.T) {
+	cases := map[string]string{
+		"state": `providers:
+  broken:
+    auth_params:
+      state: attacker-chosen`,
+		"code_challenge": `providers:
+  broken:
+    auth_params:
+      code_challenge: attacker-chosen`,
+		"redirect_uri": `providers:
+  broken:
+    auth_params:
+      redirect_uri: https://evil.example.com/cb`,
+		// Derived from resource_url, and has to match on exchange and refresh —
+		// which auth_params does not reach.
+		"resource": `providers:
+  broken:
+    auth_params:
+      resource: https://evil.example.com`,
+		"scope": `providers:
+  broken:
+    auth_params:
+      scope: openid`,
+		"empty name": `providers:
+  broken:
+    auth_params:
+      "": consent`,
+	}
+	for name, yaml := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir() + "/providers.yaml"
+			if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadProvidersConfig(path); err == nil {
+				t.Errorf("expected validation error for %q, got nil", name)
+			}
+		})
+	}
+}
+
+func TestLoadProvidersConfig_InterpolatesAuthParams(t *testing.T) {
+	t.Setenv("TEST_PROMPT_VALUE", "consent")
+	yaml := `providers:
+  api:
+    auth_url: https://example.com/oauth/authorize
+    token_url: https://example.com/oauth/token
+    auth_params:
+      prompt: ${TEST_PROMPT_VALUE}
+      access_type: offline`
+
+	path := t.TempDir() + "/providers.yaml"
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadProvidersConfig(path)
+	if err != nil {
+		t.Fatalf("LoadProvidersConfig failed: %v", err)
+	}
+	p := cfg.Providers["api"]
+	if got := p.AuthParams["prompt"]; got != "consent" {
+		t.Errorf("prompt = %q, want %q", got, "consent")
+	}
+	if got := p.AuthParams["access_type"]; got != "offline" {
+		t.Errorf("access_type = %q, want %q", got, "offline")
+	}
+}
+
+// prompt=consent is the default for every provider, static or DCR alike: a
+// server that follows OIDC Core §11 strictly needs it to issue a refresh token,
+// and one that does not ignores it. A DCR provider is registered against an
+// authorization server we have no console for, so there is no other way to
+// intervene there at all.
+func TestAuthParams_DefaultsToPromptConsent(t *testing.T) {
+	cases := map[string]struct {
+		cfg  ProviderConfig
+		want string // "" means the prompt parameter should be absent
+	}{
+		"dcr gets the default": {
+			cfg:  ProviderConfig{UseDCRP: true, ResourceURL: "https://mcp.example.com/mcp"},
+			want: "consent",
+		},
+		"explicit prompt wins": {
+			cfg: ProviderConfig{UseDCRP: true, ResourceURL: "https://mcp.example.com/mcp",
+				AuthParams: map[string]string{"prompt": "login"}},
+			want: "login",
+		},
+		"empty prompt switches the default off": {
+			cfg: ProviderConfig{UseDCRP: true, ResourceURL: "https://mcp.example.com/mcp",
+				AuthParams: map[string]string{"prompt": ""}},
+			want: "",
+		},
+		"static provider gets the default too": {
+			cfg:  ProviderConfig{AuthURL: "https://example.com/a", TokenURL: "https://example.com/t"},
+			want: "consent",
+		},
+		"static provider can opt out": {
+			cfg: ProviderConfig{AuthURL: "https://example.com/a", TokenURL: "https://example.com/t",
+				AuthParams: map[string]string{"prompt": ""}},
+			want: "",
+		},
+		"other auth_params do not suppress the default": {
+			cfg: ProviderConfig{AuthURL: "https://example.com/a", TokenURL: "https://example.com/t",
+				AuthParams: map[string]string{"access_type": "offline"}},
+			want: "consent",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.cfg.authParams()["prompt"]; got != tc.want {
+				t.Errorf("prompt = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The DCR default must survive all the way into the real authorization URL, not
+// just authParams().
+func TestGetAuthURL_DCRSendsPromptConsent(t *testing.T) {
+	cfg := &ProvidersConfig{
+		Providers: map[string]ProviderConfig{
+			"mcp": {ResourceURL: "https://mcp.example.com/mcp", UseDCRP: true, Scopes: []string{"offline_access"}},
+		},
+	}
+	m := NewManager(cfg)
+	m.CheckAndUpdateProvider("mcp", nil)
+	m.seedDiscovery("https://mcp.example.com/mcp", &resolvedProvider{
+		endpoint:    oauth2.Endpoint{AuthURL: "https://as.example.com/authorize", TokenURL: "https://as.example.com/token"},
+		authMethods: []string{"none"},
+	})
+	_ = m.credStore.SaveCredentials("mcp", &clientCredentials{ClientID: "registered-id"})
+
+	authURL, _, err := m.GetAuthURL(context.Background(), "org1", "mcp", "", "", "https://example.com/cb")
+	if err != nil {
+		t.Fatalf("GetAuthURL failed: %v", err)
+	}
+	if got := queryParam(t, authURL, "prompt"); got != "consent" {
+		t.Errorf("prompt = %q, want %q", got, "consent")
 	}
 }
 
@@ -298,5 +549,75 @@ func TestProviderConfig_ParsesScopes(t *testing.T) {
 	}
 	if p.DisplayName != "GitHub" {
 		t.Errorf("unexpected display name: %s", p.DisplayName)
+	}
+}
+
+// countingTokenStore records how many times a token entry is written back, so a
+// test can tell the cheap read path from the refresh path.
+type countingTokenStore struct {
+	*InMemoryTokenStore
+	saves int
+}
+
+func (s *countingTokenStore) Save(orgID, providerID string, entry *tokenEntry) error {
+	s.saves++
+	return s.InMemoryTokenStore.Save(orgID, providerID, entry)
+}
+
+// Tokens that need no refresh must be returned without touching the store. The
+// zero-expiry case is the interesting one: it means "never expires", but
+// time.Until on it is hugely negative, so a naive deadline comparison sends
+// every call down the refresh path and rewrites the keychain entry for nothing.
+func TestGetAccessToken_ReturnsUnexpiredTokenWithoutWriting(t *testing.T) {
+	cases := map[string]struct {
+		token   *oauth2.Token
+		want    string
+		wantErr bool
+	}{
+		// What Slack stores for a bot token, and GitHub for a classic one.
+		"no expiry never expires": {
+			token: &oauth2.Token{AccessToken: "xoxb-static", TokenType: "bot"},
+			want:  "xoxb-static",
+		},
+		"expiry far in the future": {
+			token: &oauth2.Token{AccessToken: "fresh", Expiry: time.Now().Add(time.Hour)},
+			want:  "fresh",
+		},
+		// The guard above must not swallow tokens that genuinely need a refresh:
+		// this one is expired with nothing to refresh from, so it has to fail.
+		"expired with no refresh token": {
+			token:   &oauth2.Token{AccessToken: "stale", Expiry: time.Now().Add(-time.Hour)},
+			wantErr: true,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &countingTokenStore{InMemoryTokenStore: NewInMemoryTokenStore()}
+			m := NewManagerWithStore(&ProvidersConfig{
+				Providers: map[string]ProviderConfig{"api": {TokenURL: "https://example.com/token"}},
+			}, store)
+			m.CheckAndUpdateProvider("api", nil)
+			if err := store.Save("org1", "api", &tokenEntry{token: tc.token}); err != nil {
+				t.Fatal(err)
+			}
+			store.saves = 0 // ignore the setup write
+
+			got, err := m.GetAccessToken(context.Background(), "org1", "api")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("GetAccessToken succeeded with %q, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetAccessToken failed: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("token = %q, want %q", got, tc.want)
+			}
+			if store.saves != 0 {
+				t.Errorf("store written %d times, want 0 — the token needed no refresh", store.saves)
+			}
+		})
 	}
 }
