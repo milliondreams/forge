@@ -145,6 +145,10 @@ func (s *Server) GetAgents(c *gin.Context, _ contract.GetAgentsParams) {
 	s.dispatch(c, handleGetCatalogAgents(s.store), nil)
 }
 
+func (s *Server) ListConfiguredDependencies(c *gin.Context, _ contract.ListConfiguredDependenciesParams) {
+	s.dispatch(c, handleListConfiguredDependencies(), nil)
+}
+
 func (s *Server) RegisterAgent(c *gin.Context, _ contract.RegisterAgentParams) {
 	s.dispatch(c, handleRegisterCatalogAgent(s.store), nil)
 }

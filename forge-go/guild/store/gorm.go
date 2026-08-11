@@ -183,8 +183,6 @@ func runSchemaParityMigrations(db *gorm.DB) error {
 		`ALTER TABLE IF EXISTS agent_entry DROP COLUMN IF EXISTS created_at;`,
 		`ALTER TABLE IF EXISTS agent_entry DROP COLUMN IF EXISTS updated_at;`,
 		`ALTER TABLE IF EXISTS guild_routes DROP COLUMN IF EXISTS mark_forwarded;`,
-		`ALTER TABLE IF EXISTS agents DROP COLUMN IF EXISTS resources;`,
-		`ALTER TABLE IF EXISTS agents DROP COLUMN IF EXISTS qos;`,
 		`ALTER TABLE IF EXISTS guilds DROP COLUMN IF EXISTS gateway;`,
 		`ALTER TABLE IF EXISTS guilds DROP COLUMN IF EXISTS created_at;`,
 		`ALTER TABLE IF EXISTS guilds DROP COLUMN IF EXISTS updated_at;`,

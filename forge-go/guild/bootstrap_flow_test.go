@@ -13,6 +13,23 @@ import (
 	"github.com/rustic-ai/forge/forge-go/protocol"
 )
 
+func registerBootstrapAgentFixtures(t *testing.T, db store.Store, spec *protocol.GuildSpec) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, agent := range spec.Agents {
+		if seen[agent.ClassName] {
+			continue
+		}
+		seen[agent.ClassName] = true
+		if err := db.RegisterAgent(&store.CatalogAgentEntry{
+			QualifiedClassName: agent.ClassName,
+			AgentName:          agent.Name,
+		}); err != nil {
+			t.Fatalf("register agent fixture %q: %v", agent.ClassName, err)
+		}
+	}
+}
+
 func TestBootstrap_Flow_PersistsRoutesAndEnqueuesSpawn(t *testing.T) {
 	ctx := context.Background()
 
@@ -67,6 +84,7 @@ func TestBootstrap_Flow_PersistsRoutesAndEnqueuesSpawn(t *testing.T) {
 		},
 	}
 
+	registerBootstrapAgentFixtures(t, db, spec)
 	_, err = Bootstrap(ctx, db, control.NewRedisControlTransport(rdb), nil, spec, "org-bootstrap", filepath.Join(t.TempDir(), "missing-agent-deps.yaml"))
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -162,6 +180,7 @@ func TestBootstrap_Flow_NormalizesSpawnedGuildSpecIDs(t *testing.T) {
 		},
 	}
 
+	registerBootstrapAgentFixtures(t, db, spec)
 	guildModel, err := Bootstrap(ctx, db, control.NewRedisControlTransport(rdb), nil, spec, "org-bootstrap", filepath.Join(t.TempDir(), "missing-agent-deps.yaml"))
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -261,6 +280,7 @@ func TestBootstrap_Flow_PersistsResolvedFilesystemPathBase(t *testing.T) {
 		},
 	}
 
+	registerBootstrapAgentFixtures(t, db, spec)
 	_, err = Bootstrap(ctx, db, control.NewRedisControlTransport(rdb), nil, spec, "org-bootstrap", filepath.Join(t.TempDir(), "missing-agent-deps.yaml"))
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -382,6 +402,7 @@ func TestBootstrap_Flow_PersistsResolvedS3FilesystemPathBase(t *testing.T) {
 		},
 	}
 
+	registerBootstrapAgentFixtures(t, db, spec)
 	_, err = Bootstrap(ctx, db, control.NewRedisControlTransport(rdb), nil, spec, "org-bootstrap", filepath.Join(t.TempDir(), "missing-agent-deps.yaml"))
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -510,6 +531,7 @@ func TestBootstrap_Flow_PersistsForgeExtraDeps(t *testing.T) {
 		},
 	}
 
+	registerBootstrapAgentFixtures(t, db, spec)
 	if _, err := Bootstrap(ctx, db, control.NewRedisControlTransport(rdb), nil, spec, "org-extra-deps",
 		filepath.Join(t.TempDir(), "missing-agent-deps.yaml")); err != nil {
 		t.Fatalf("bootstrap: %v", err)

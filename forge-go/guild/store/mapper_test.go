@@ -192,3 +192,39 @@ func TestMapper_ForgeExtraDeps(t *testing.T) {
 		}
 	})
 }
+
+func TestMapper_AgentRuntimeFields(t *testing.T) {
+	cpu := 2.0
+	timeout := 45
+	retries := 3
+	spec := &protocol.AgentSpec{
+		ID:          "runtime-agent",
+		Name:        "Runtime Agent",
+		Description: "Exercises fields used by ensure-agent equality",
+		ClassName:   "test.RuntimeAgent",
+		DependencyMap: map[string]protocol.DependencySpec{
+			"llm": {
+				ClassName:    "test.LLMResolver",
+				ProvidedType: "test.LLM",
+				Properties:   map[string]interface{}{"model": "model-a"},
+			},
+		},
+		Resources: protocol.ResourceSpec{
+			NumCPUs:         &cpu,
+			Secrets:         []string{"API_KEY"},
+			CustomResources: map[string]interface{}{"memory": float64(1024)},
+		},
+		QOS: protocol.QOSSpec{Timeout: &timeout, RetryCount: &retries},
+	}
+
+	got := store.ToAgentSpec(store.FromAgentSpec(spec, "guild-1"))
+	if !reflect.DeepEqual(got.Resources, spec.Resources) {
+		t.Errorf("Resources = %#v, want %#v", got.Resources, spec.Resources)
+	}
+	if !reflect.DeepEqual(got.QOS, spec.QOS) {
+		t.Errorf("QOS = %#v, want %#v", got.QOS, spec.QOS)
+	}
+	if got.DependencyMap["llm"].ProvidedType != "test.LLM" {
+		t.Errorf("ProvidedType = %q, want test.LLM", got.DependencyMap["llm"].ProvidedType)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/rustic-ai/forge/forge-go/control"
+	"github.com/rustic-ai/forge/forge-go/dependencies"
 	"github.com/rustic-ai/forge/forge-go/helper/logging"
 	"github.com/rustic-ai/forge/forge-go/infraevents"
 	"github.com/rustic-ai/forge/forge-go/messaging"
@@ -64,6 +65,9 @@ func deregisterNode(ctx context.Context, serverURL, nodeID string) error {
 
 func StartClient(ctx context.Context, config *ClientConfig) error {
 	log := logging.FromContext(ctx, slog.Default()).With("node_id", config.NodeID)
+	if err := dependencies.ValidateMode(config.DependencyPrewarmMode); err != nil {
+		return err
+	}
 
 	if config.CPUs <= 0 {
 		config.CPUs = runtime.NumCPU()
@@ -168,6 +172,15 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to create infra event publisher: %w", err)
 	}
+	var dependencyPrewarmer *dependencies.Coordinator
+	if dependencies.Enabled(config.DependencyPrewarmMode) {
+		dependencyPrewarmer, err = dependencies.NewCoordinator(dependencies.Config{
+			Context: ctx, Registry: reg, Publisher: infraPublisher, NodeID: config.NodeID,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize dependency prewarmer: %w", err)
+		}
+	}
 	supervisorFactory := buildOrgSupervisorFactory(statusStore, config.DefaultSupervisor, config.DefaultTransport, msgBackend, infraPublisher, config.DataDir, config.AttachProcessTree, config.ZMQBridgeMode)
 	nodeQueueKey := "forge:control:node:" + config.NodeID
 	queueHandler := control.NewControlQueueHandlerWithQueueFactory(controlPlane, reg, sec, supervisorFactory, nil, nodeQueueKey,
@@ -175,9 +188,13 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 		control.WithNodeID(config.NodeID),
 		control.WithInfraEventPublisher(infraPublisher),
 		control.WithStopAgentsOnExit(config.StopAgentsOnExit),
+		control.WithDependencyPrewarmer(dependencyPrewarmer),
 	)
 	if err := queueHandler.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start node queue listener: %w", err)
+	}
+	if dependencyPrewarmer != nil {
+		dependencyPrewarmer.WarmSystem()
 	}
 
 	go func() {

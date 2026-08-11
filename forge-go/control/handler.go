@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rustic-ai/forge/forge-go/dependencies"
 	"github.com/rustic-ai/forge/forge-go/guild/store"
 	"github.com/rustic-ai/forge/forge-go/helper/envvars"
 	"github.com/rustic-ai/forge/forge-go/infraevents"
@@ -25,21 +26,22 @@ type SupervisorFactory func(orgID string) supervisor.AgentSupervisor
 
 // ControlQueueHandler wiring layer connecting the control transport to the localized ProcessSupervisor.
 type ControlQueueHandler struct {
-	registry         *registry.Registry
-	secrets          secrets.SecretProvider
-	sup              supervisor.AgentSupervisor
-	supByOrg         map[string]supervisor.AgentSupervisor
-	supMu            sync.RWMutex
-	supFactory       SupervisorFactory
-	agentOrg         map[string]string
-	agentMu          sync.RWMutex
-	store            store.Store
-	listener         *ControlQueueListener
-	responder        *ControlQueueResponder
-	infraPublisher   *infraevents.Publisher
-	statusStore      supervisor.AgentStatusStore
-	nodeID           string
-	stopAgentsOnExit bool
+	registry            *registry.Registry
+	secrets             secrets.SecretProvider
+	sup                 supervisor.AgentSupervisor
+	supByOrg            map[string]supervisor.AgentSupervisor
+	supMu               sync.RWMutex
+	supFactory          SupervisorFactory
+	agentOrg            map[string]string
+	agentMu             sync.RWMutex
+	store               store.Store
+	listener            *ControlQueueListener
+	responder           *ControlQueueResponder
+	infraPublisher      *infraevents.Publisher
+	statusStore         supervisor.AgentStatusStore
+	nodeID              string
+	stopAgentsOnExit    bool
+	dependencyPrewarmer *dependencies.Coordinator
 }
 
 // NewControlQueueHandler creates a fully integrated control handler.
@@ -113,6 +115,12 @@ func WithInfraEventPublisher(p *infraevents.Publisher) HandlerOption {
 // When false (default), Stop() only halts the listener — agents keep running.
 func WithStopAgentsOnExit(v bool) HandlerOption {
 	return func(h *ControlQueueHandler) { h.stopAgentsOnExit = v }
+}
+
+// WithDependencyPrewarmer enables dependency gating without changing any
+// supervisor's native launch contract.
+func WithDependencyPrewarmer(prewarmer *dependencies.Coordinator) HandlerOption {
+	return func(h *ControlQueueHandler) { h.dependencyPrewarmer = prewarmer }
 }
 
 func newControlQueueHandler(
@@ -347,6 +355,32 @@ func (h *ControlQueueHandler) handleSpawn(ctx context.Context, req *protocol.Spa
 	}
 
 	orgID := h.resolveOrganizationForSpawn(req, guildOrgID)
+	if h.dependencyPrewarmer != nil && entry.Runtime == registry.RuntimeUVX {
+		metadata := dependencies.Metadata{
+			GuildID: req.GuildID, AgentID: req.AgentSpec.ID, OrganizationID: orgID, RequestID: req.RequestID,
+		}
+		var prepareErr error
+		if req.AgentSpec.ID == req.GuildID+"#manager_agent" {
+			prepareErr = h.dependencyPrewarmer.PrepareGuild(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps, guildSpec)
+		} else {
+			prepareErr = h.dependencyPrewarmer.PrepareAgent(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps)
+		}
+		if prepareErr != nil {
+			slog.Error("handleSpawn: dependency preparation failed", "agent_id", req.AgentSpec.ID, "error", prepareErr)
+			if h.statusStore != nil {
+				_ = h.statusStore.WriteStatus(ctx, req.GuildID, req.AgentSpec.ID, &supervisor.AgentStatusJSON{
+					State: "failed", NodeID: h.nodeID, Timestamp: time.Now(),
+				}, 120*time.Second)
+			}
+			_ = h.emitSpawnRejected(ctx, req, "spawn rejected because dependency preparation failed", map[string]any{
+				"error": prepareErr.Error(), "reason": "dependency_preparation_failed",
+			})
+			if !shouldSuppressSpawnResponse(req) {
+				h.sendError(ctx, req.RequestID, prepareErr.Error())
+			}
+			return
+		}
+	}
 
 	envVars, err := envvars.BuildAgentEnv(ctx, guildSpec, &req.AgentSpec, entry, h.secrets, orgID)
 	if err != nil {

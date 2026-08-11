@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/rustic-ai/forge/forge-go/control"
+	"github.com/rustic-ai/forge/forge-go/guild/store"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/scheduler"
 )
@@ -63,6 +64,7 @@ func TestStartServer_EnrichesMessagingConfigForNodeDispatch(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	registerDistributedTestEchoAgent(t, cfg.DatabaseURL)
 
 	guildReq := map[string]interface{}{
 		"org_id": "org-1",
@@ -219,6 +221,7 @@ func TestStartServer_AcceptedSpawnSurvivesUntilNodeAvailable(t *testing.T) {
 		defer func() { _ = resp.Body.Close() }()
 		return resp.StatusCode == http.StatusOK
 	}, 5*time.Second, 100*time.Millisecond)
+	registerDistributedTestEchoAgent(t, cfg.DatabaseURL)
 
 	guildReq := map[string]interface{}{
 		"org_id": "org-1",
@@ -302,6 +305,20 @@ func TestStartServer_AcceptedSpawnSurvivesUntilNodeAvailable(t *testing.T) {
 	var dispatched protocol.SpawnRequest
 	require.NoError(t, json.Unmarshal(wrapper.Payload, &dispatched))
 	assert.Equal(t, protocol.SpawnResponseModeNone, dispatched.ResponseMode)
+}
+
+func registerDistributedTestEchoAgent(t *testing.T, databaseURL string) {
+	t.Helper()
+	db, err := store.NewGormStore("sqlite", databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.RegisterAgent(&store.CatalogAgentEntry{
+		QualifiedClassName: "rustic_ai.core.agents.testutils.echo_agent.EchoAgent",
+		AgentName:          "Echo Agent",
+		AgentPropsSchema:   store.JSONB{"type": "object"},
+		MessageHandlers:    store.JSONB{},
+		AgentDependencies:  store.JSONB{},
+	}))
 }
 
 func TestStartServer_WithClient_RegistersNodeWithEmbeddedRedis(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -212,7 +213,11 @@ func (s *Server) HandleManagerEnsureAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, err := s.store.GetAgent(guildID, spec.ID); err == nil {
+	if existing, err := s.store.GetAgent(guildID, spec.ID); err == nil {
+		if !agentSpecsEquivalent(store.ToAgentSpec(existing), &spec) {
+			ReplyError(w, http.StatusConflict, "agent id already exists with a different specification")
+			return
+		}
 		ReplyJSON(w, http.StatusOK, EnsureAgentResponse{
 			AgentID: spec.ID,
 			Created: false,
@@ -231,6 +236,44 @@ func (s *Server) HandleManagerEnsureAgent(w http.ResponseWriter, r *http.Request
 		AgentID: spec.ID,
 		Created: true,
 	})
+}
+
+func agentSpecsEquivalent(left, right *protocol.AgentSpec) bool {
+	return reflect.DeepEqual(canonicalJSONValue(left), canonicalJSONValue(right))
+}
+
+func canonicalJSONValue(value interface{}) interface{} {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+
+	var decoded interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return value
+	}
+	return removeNullObjectFields(decoded)
+}
+
+func removeNullObjectFields(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		cleaned := make(map[string]interface{}, len(typed))
+		for key, child := range typed {
+			if child != nil {
+				cleaned[key] = removeNullObjectFields(child)
+			}
+		}
+		return cleaned
+	case []interface{}:
+		cleaned := make([]interface{}, len(typed))
+		for i, child := range typed {
+			cleaned[i] = removeNullObjectFields(child)
+		}
+		return cleaned
+	default:
+		return value
+	}
 }
 
 func (s *Server) HandleManagerUpdateAgentStatus(w http.ResponseWriter, r *http.Request) {

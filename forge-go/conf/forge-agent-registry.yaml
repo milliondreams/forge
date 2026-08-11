@@ -53,7 +53,6 @@ entries:
     package: rusticai-llm-agent
     with_dependencies:
       - rusticai-litellm
-      - rusticai-lancedb
     secrets:
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
@@ -65,7 +64,6 @@ entries:
     package: rusticai-llm-agent
     with_dependencies:
       - rusticai-litellm
-      - rusticai-lancedb
     secrets:
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
@@ -347,15 +345,15 @@ entries:
     runtime: uvx
     package: rusticai-pandas-data-analyst
   - id: FactCheckerAgent
-    class_name: rustic_ai.showcase.google.fact_checker.FactCheckerAgent
+    class_name: rustic_ai.fact_checker.agent.FactCheckerAgent
     description: Auto-added from static agents snapshot
     runtime: uvx
-    package: rusticai-showcase
+    package: rusticai-fact-checker
   - id: ResearchManager
-    class_name: rustic_ai.showcase.laira.research_manager.ResearchManager
+    class_name: rustic_ai.research_manager.agent.ResearchManager
     description: Auto-added from static agents snapshot
     runtime: uvx
-    package: rusticai-showcase
+    package: rusticai-research-manager
   - id: SimulationAgent
     class_name: rustic_ai.simulation.agent.SimulationAgent
     description: Auto-added from static agents snapshot

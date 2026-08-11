@@ -242,7 +242,11 @@ func TestProcessSupervisorLaunchesIntoPerAgentWorkDir(t *testing.T) {
 		cwdContent = strings.TrimSpace(string(data))
 		return cwdContent != ""
 	}, 5*time.Second, 50*time.Millisecond)
-	require.Equal(t, filepath.Clean(workDir), filepath.Clean(cwdContent))
+	canonicalWorkDir, err := filepath.EvalSymlinks(workDir)
+	require.NoError(t, err)
+	canonicalCWD, err := filepath.EvalSymlinks(cwdContent)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Clean(canonicalWorkDir), filepath.Clean(canonicalCWD))
 
 	var lines []string
 	require.Eventually(t, func() bool {

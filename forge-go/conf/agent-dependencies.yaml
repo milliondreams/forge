@@ -1,10 +1,22 @@
 kvstore:
   class_name: rustic_ai.core.guild.agent_ext.depends.kvstore.InMemoryKVStoreResolver
-  provided_type: rustic_ai.core.kvstore.KVStore
+  provided_type: rustic_ai.core.guild.agent_ext.depends.kvstore.base.BaseKVStore
+  catalog:
+    display_name: In-memory KV Store
+    provider: builtin
+    capabilities: [kvstore]
+    aliases: [memory-kv]
+    selectable: true
   properties: {}
 filesystem:
   class_name: rustic_ai.core.guild.agent_ext.depends.filesystem.FileSystemResolver
-  provided_type: rustic_ai.core.filesystem.FileSystem
+  provided_type: fsspec.implementations.dirfs.DirFileSystem
+  catalog:
+    display_name: Local Filesystem
+    provider: builtin
+    capabilities: [filesystem]
+    aliases: [local-filesystem]
+    selectable: true
   properties:
     path_base: /tmp
     protocol: file
@@ -12,22 +24,73 @@ filesystem:
       auto_mkdir: true
 code_runner:
   class_name: rustic_ai.core.guild.agent_ext.depends.code_execution.stateless.InProcessCodeInterpreterResolver
-  provided_type: rustic_ai.core.code_execution.CodeRunner
+  provided_type: rustic_ai.core.guild.agent_ext.depends.code_execution.stateless.code_runner.CodeRunner
+  catalog:
+    display_name: In-process Code Runner
+    provider: builtin
+    capabilities: [code-execution]
+    aliases: [python]
+    selectable: true
   properties: {}
 embeddings:
   class_name: rustic_ai.langchain.agent_ext.embeddings.openai.OpenAIEmbeddingsResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.embeddings.embeddings.Embeddings
+  catalog:
+    display_name: OpenAI Embeddings
+    provider: openai
+    capabilities: [embeddings]
+    aliases: [openai-embeddings]
+    selectable: true
+  requirements:
+    secrets: [OPENAI_API_KEY]
   properties: {}
+embeddings_local_nomic:
+  class_name: rustic_ai.langchain.agent_ext.embeddings.openai.OpenAIEmbeddingsResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.embeddings.embeddings.Embeddings
+  catalog:
+    display_name: Nomic Embed
+    description: Local OpenAI-compatible embedding model
+    provider: local
+    capabilities: [embeddings]
+    aliases: [nomic-embed]
+    selectable: true
+  properties:
+    model_name: rustic/nomic-embed-default
+    model_conf:
+      openai_api_base: http://localhost:55262/v1
+      openai_api_key: local-not-required
 vectorstore:
   class_name: rustic_ai.chroma.agent_ext.vectorstore.ChromaResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.vectorstore.vectorstore.VectorStore
+  catalog:
+    display_name: Chroma Vector Store
+    provider: chroma
+    capabilities: [vectorstore]
+    aliases: [chroma]
+    selectable: true
   properties: {}
 textsplitter:
   class_name: rustic_ai.langchain.agent_ext.text_splitter.recursive_splitter.RecursiveSplitterResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.text_splitter.text_splitter.TextSplitter
+  catalog:
+    display_name: Recursive Text Splitter
+    provider: langchain
+    capabilities: [text-splitting]
+    aliases: [recursive-splitter]
+    selectable: true
   properties:
     conf:
       chunk_size: 4000
       chunk_overlap: 200
 kb_backend:
   class_name: rustic_ai.core.knowledgebase.kbindex_backend_memory.InMemoryKBIndexBackendResolver
+  provided_type: rustic_ai.core.knowledgebase.kbindex_backend.KBIndexBackend
+  catalog:
+    display_name: In-memory Knowledge Base
+    provider: builtin
+    capabilities: [knowledge-base]
+    aliases: [memory-kb]
+    selectable: true
   properties: {}
 
 # ---------------------------------------------------------------------------
@@ -43,7 +106,14 @@ kb_backend:
 
 llm:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Qwen 3.5 0.8B Starter
+    description: Default local OpenAI-compatible model
+    provider: local
+    capabilities: [chat]
+    aliases: [qwen-0.8b, qwen]
+    selectable: true
   properties:
     model: openai/rustic/qwen3.5-0.8b-starter
     conf:
@@ -51,23 +121,29 @@ llm:
 
 llm_local_qwen3_5_0_8b:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Qwen 3.5 0.8B Starter
+    description: Lightweight local OpenAI-compatible model
+    provider: local
+    capabilities: [chat]
+    aliases: [qwen-0.8b, qwen3.5-0.8b, starter, small, fast]
+    selectable: true
   properties:
     model: openai/rustic/qwen3.5-0.8b-starter
     conf:
       base_url: http://localhost:55262/v1
 
-llm_local_nomic_embed:
-  class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
-  properties:
-    model: openai/rustic/nomic-embed-default
-    conf:
-      base_url: http://localhost:55262/v1
-
 llm_local_qwen3_5_2b:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Qwen 3.5 2B Balanced
+    description: Balanced local OpenAI-compatible model
+    provider: local
+    capabilities: [chat, coding, reasoning]
+    aliases: [qwen-2b, qwen3.5-2b, standard, balanced, medium]
+    selectable: true
   properties:
     model: openai/rustic/qwen3.5-2b-balanced
     conf:
@@ -75,7 +151,14 @@ llm_local_qwen3_5_2b:
 
 llm_local_qwen3_5_4b:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Qwen 3.5 4B Quality
+    description: Higher-quality local OpenAI-compatible model
+    provider: local
+    capabilities: [chat, coding, reasoning]
+    aliases: [qwen-4b, qwen3.5-4b, quality, large]
+    selectable: true
   properties:
     model: openai/rustic/qwen3.5-4b-quality
     conf:
@@ -83,7 +166,13 @@ llm_local_qwen3_5_4b:
 
 llm_local_qwen3_4b_text:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Qwen 3 4B Text
+    provider: local
+    capabilities: [chat]
+    aliases: [qwen3-4b]
+    selectable: true
   properties:
     model: openai/rustic/qwen3-4b-text
     conf:
@@ -91,7 +180,13 @@ llm_local_qwen3_4b_text:
 
 llm_local_gemma3_4b:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Gemma 3 4B
+    provider: local
+    capabilities: [chat]
+    aliases: [gemma-4b]
+    selectable: true
   properties:
     model: openai/rustic/gemma-3-4b-it
     conf:
@@ -102,7 +197,16 @@ llm_local_gemma3_4b:
 
 llm_openai:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: OpenAI GPT-5.4
+    description: OpenAI-hosted general-purpose model
+    provider: openai
+    capabilities: [chat, tools]
+    aliases: [gpt-5.4, gpt]
+    selectable: true
+  requirements:
+    secrets: [OPENAI_API_KEY]
   properties:
     model: gpt-5.4
 
@@ -111,30 +215,65 @@ llm_openai:
 
 llm_anthropic_sonnet:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Claude Sonnet 4.6
+    provider: anthropic
+    capabilities: [chat, tools]
+    aliases: [claude-sonnet, sonnet]
+    selectable: true
+  requirements:
+    secrets: [ANTHROPIC_API_KEY]
   properties:
-    model: anthropic/claude-sonnet-4-6-20260301
+    model: anthropic/claude-sonnet-4-6
 
 llm_anthropic_opus:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Claude Opus 4.6
+    provider: anthropic
+    capabilities: [chat, tools]
+    aliases: [claude-opus, opus]
+    selectable: true
+  requirements:
+    secrets: [ANTHROPIC_API_KEY]
   properties:
-    model: anthropic/claude-opus-4-6-20260301
+    model: anthropic/claude-opus-4-6
 
 # --- Google Gemini (AI Studio) ---
 # Requires: GEMINI_API_KEY
 
 llm_gemini:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
-  provided_type: rustic_ai.core.llm.LLM
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Gemini 3.1
+    provider: google
+    capabilities: [chat, tools]
+    aliases: [gemini]
+    selectable: true
+  requirements:
+    secrets: [GEMINI_API_KEY]
   properties:
-    model: gemini/gemini-3.1
+    model: gemini/gemini-3.1-pro-preview
 
 # --- Google Vertex AI ---
 # Requires: GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION
 
 llm_vertexai:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Vertex AI Gemini 3.1
+    provider: vertex_ai
+    capabilities: [chat, tools]
+    aliases: [vertex, vertex-gemini]
+    selectable: true
+  requirements:
+    secrets: [GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION]
   properties:
-    model: vertex_ai/gemini-3.1
+    model: vertex_ai/gemini-3.1-pro-preview
     conf:
       vertex_project: null
       vertex_location: null
@@ -144,6 +283,15 @@ llm_vertexai:
 
 llm_bedrock:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: AWS Bedrock Claude
+    provider: bedrock
+    capabilities: [chat]
+    aliases: [bedrock]
+    selectable: true
+  requirements:
+    secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME]
   properties:
     model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
     conf:
@@ -154,6 +302,15 @@ llm_bedrock:
 
 llm_azure:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Azure OpenAI
+    provider: azure
+    capabilities: [chat, tools]
+    aliases: [azure-openai]
+    selectable: true
+  requirements:
+    secrets: [AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION]
   properties:
     model: azure/<your-deployment-name>
     conf:
@@ -165,6 +322,15 @@ llm_azure:
 
 llm_cohere:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Cohere Command R+
+    provider: cohere
+    capabilities: [chat]
+    aliases: [cohere]
+    selectable: true
+  requirements:
+    secrets: [COHERE_API_KEY]
   properties:
     model: cohere_chat/command-r-plus
 
@@ -173,5 +339,14 @@ llm_cohere:
 
 llm_groq:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM
+  catalog:
+    display_name: Groq Llama 3.3 70B
+    provider: groq
+    capabilities: [chat]
+    aliases: [groq]
+    selectable: true
+  requirements:
+    secrets: [GROQ_API_KEY]
   properties:
     model: groq/llama-3.3-70b-versatile

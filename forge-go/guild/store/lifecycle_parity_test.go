@@ -45,6 +45,9 @@ func TestStore_GuildSpecLifecycle_EmptyCollectionsStayNonNil(t *testing.T) {
 		Description: "Ensure []/{} are stable",
 		Properties: map[string]interface{}{
 			"execution_engine": "rustic_ai.forge.execution_engine.ForgeExecutionEngine",
+			"dependency_selections": map[string]interface{}{
+				"dynamic_models": map[string]interface{}{"required_type": "example.LLM"},
+			},
 			"messaging": map[string]interface{}{
 				"backend_module": "rustic_ai.redis.messaging.backend",
 				"backend_class":  "RedisMessagingBackend",

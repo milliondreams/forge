@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import logging
+import re
 from typing import List, Optional
 
 from rustic_ai.core.agents.commons.message_formats import ErrorMessage
@@ -44,6 +46,7 @@ from rustic_ai.core.guild.builders import AgentBuilder, GuildBuilder, GuildHelpe
 from rustic_ai.core.guild.dsl import GuildSpec
 from rustic_ai.core.guild.guild import Guild
 from rustic_ai.core.guild.metastore.models import AgentStatus, GuildStatus
+from rustic_ai.core.guild.metaprog.agent_registry import AgentRegistry
 from rustic_ai.core.state.manager.state_manager import StateManager
 from rustic_ai.core.state.models import (
     StateFetchError,
@@ -55,7 +58,7 @@ from rustic_ai.core.state.models import (
     StateUpdateResponse,
 )
 from rustic_ai.core.utils.basic_class_utils import get_qualified_class_name
-from rustic_ai.core.utils.class_utils import get_state_manager
+from rustic_ai.core.utils.class_utils import get_agent_class, get_state_manager
 from rustic_ai.core.utils.priority import Priority
 
 from rustic_ai.forge.agents.system.guild_manager_agent_props import (
@@ -211,7 +214,13 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             )
 
         self.guild.register_agent(self.get_spec())
-        self.metastore.ensure_agent(self.guild_id, self.get_spec())
+        # Bootstrap normally persists the manager first, but alternate launch paths
+        # must establish the same metastore invariant before advancing guild status.
+        manager_ensure = self.metastore.ensure_agent(self.guild_id, self.get_spec())
+        if manager_ensure.get("agent_id") != self.id:
+            raise RuntimeError(
+                f"Forge did not confirm persisted Guild Manager row {self.id!r}"
+            )
         self.metastore.update_guild_status(self.guild_id, GuildStatus.STARTING)
 
         if self.agent_health:
@@ -251,15 +260,17 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             raise RuntimeError("Guild is not initialized")
 
         aar = ctx.payload
-        self.guild.launch_agent(aar.agent_spec)
-        self.metastore.ensure_agent(self.guild_id, aar.agent_spec)
+        agent_spec = self._materialize_dependency_selections(aar)
+        ensure_response = self.metastore.ensure_agent(self.guild_id, agent_spec)
+        if ensure_response.get("created", True):
+            self.guild.launch_agent(agent_spec)
 
         self.state_manager.update_state(
             StateUpdateRequest(
                 state_owner=StateOwner.GUILD,
                 guild_id=self.guild_id,
                 agent_id=self.id,
-                update_path=f'agents.health["{aar.agent_spec.id}"]',
+                update_path=f'agents.health["{agent_spec.id}"]',
                 state_update=Heartbeat(
                     checktime=datetime.now(),
                     checkstatus=HeartbeatStatus.STARTING,
@@ -270,12 +281,97 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
         ctx.send(
             AgentLaunchResponse(
-                agent_id=aar.agent_spec.id,
-                status_code=201,
-                status="Agent launched successfully",
+                agent_id=agent_spec.id,
+                status_code=201 if ensure_response.get("created", True) else 200,
+                status=(
+                    "Agent launched successfully"
+                    if ensure_response.get("created", True)
+                    else "Agent already exists"
+                ),
             )
         )
         self._announce_guild_refresh(ctx)
+
+    def _materialize_dependency_selections(
+        self, request: AgentLaunchRequest
+    ) -> AgentSpec:
+        if not request.dependency_selections:
+            return request.agent_spec
+
+        agent_spec = request.agent_spec.model_copy(deep=True)
+        catalogs = self.guild_spec.properties.get("dependency_selections", {})
+        resolved_profiles: list[tuple[str, dict]] = []
+
+        get_agent_class(agent_spec.class_name)
+        registry_entry = AgentRegistry.get_agent(agent_spec.class_name)
+        if registry_entry is None:
+            raise ValueError(f"Agent class {agent_spec.class_name!r} is not registered")
+
+        for dependency_key, selection in request.dependency_selections.items():
+            catalog = catalogs.get(selection.catalog_key)
+            if not isinstance(catalog, dict):
+                raise ValueError(f"Unknown dependency catalog {selection.catalog_key!r}")
+            if catalog.get("dependency_key") != dependency_key:
+                raise ValueError(
+                    f"Catalog {selection.catalog_key!r} cannot provide dependency {dependency_key!r}"
+                )
+
+            required_type = catalog.get("required_type")
+            declared = next(
+                (
+                    dependency
+                    for dependency in registry_entry.agent_dependencies
+                    if dependency.dependency_key == dependency_key
+                ),
+                None,
+            )
+            if declared is None or declared.required_type != required_type:
+                raise ValueError(
+                    f"Dependency {dependency_key!r} does not match the requested agent type"
+                )
+
+            matches = self._match_catalog_profiles(
+                catalog.get("profiles", {}), selection.selector
+            )
+            if len(matches) != 1:
+                qualifier = "Unknown" if not matches else "Ambiguous"
+                raise ValueError(
+                    f"{qualifier} selector {selection.selector!r} in catalog "
+                    f"{selection.catalog_key!r}"
+                )
+
+            profile_key, profile = matches[0]
+            snapshot_key = profile.get("dependency_key")
+            dependency_spec = self.guild_spec.dependency_map.get(snapshot_key)
+            if dependency_spec is None:
+                raise ValueError(f"Dependency snapshot {snapshot_key!r} is missing")
+            agent_spec.dependency_map[dependency_key] = dependency_spec
+            resolved_profiles.append((profile_key, profile))
+
+        identity_key, identity_profile = resolved_profiles[0]
+        digest = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:8]
+        safe_key = re.sub(r"[^A-Za-z0-9_-]+", "-", identity_key).strip("-")
+        agent_spec.id = f"dynamic-{safe_key[:36]}-{digest}"
+
+        base_name = str(identity_profile.get("display_name") or identity_key)
+        used_names = {agent.name.casefold() for agent in self.guild_spec.agents}
+        agent_spec.name = base_name
+        if agent_spec.name.casefold() in used_names:
+            agent_spec.name = f"{base_name} ({digest})"
+        return agent_spec
+
+    @staticmethod
+    def _match_catalog_profiles(
+        profiles: dict, selector: str
+    ) -> list[tuple[str, dict]]:
+        normalized = selector.strip().casefold()
+        matches: list[tuple[str, dict]] = []
+        for profile_key, profile in profiles.items():
+            names = [profile_key, profile.get("display_name", "")]
+            names.extend(profile.get("aliases", []))
+            if normalized in {str(name).strip().casefold() for name in names}:
+                matches.append((profile_key, profile))
+        return matches
 
     @processor(RemoveAgentRequest)
     def remove_agent(self, ctx: ProcessContext[RemoveAgentRequest]) -> None:
@@ -593,7 +689,14 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             .set_id(user_agent_id)
             .set_name(uacr.user_name)
             .set_description(f"Agent for user {uacr.user_id}")
-            .set_properties(UserProxyAgentProps(user_id=uacr.user_id))
+            .set_properties(
+                UserProxyAgentProps(
+                    user_id=uacr.user_id,
+                    conversation_history_size=self.guild_spec.properties.get(
+                        "conversation_history_size", 0
+                    ),
+                )
+            )
             .add_additional_topic(UserProxyAgent.get_user_inbox_topic(uacr.user_id))
             .add_additional_topic(UserProxyAgent.get_user_outbox_topic(uacr.user_id))
             .add_additional_topic(

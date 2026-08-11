@@ -3070,6 +3070,73 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "DependencyAvailability": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "needs_configuration",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "reasons"
+        ]
+      },
+      "ConfiguredDependencyEntry": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "provided_type": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "availability": {
+            "$ref": "#/components/schemas/DependencyAvailability"
+          }
+        },
+        "required": [
+          "key",
+          "display_name",
+          "provided_type",
+          "capabilities",
+          "aliases",
+          "availability"
+        ]
       }
     }
   },
@@ -6659,6 +6726,57 @@
         "summary": "Get Category Blueprints",
         "tags": [
           "blueprints"
+        ]
+      }
+    },
+    "/catalog/dependencies": {
+      "get": {
+        "operationId": "listConfiguredDependencies",
+        "parameters": [
+          {
+            "name": "provided_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "capability",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_unavailable",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe configured dependency catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfiguredDependencyEntry"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Configured Dependencies",
+        "tags": [
+          "dependencies"
         ]
       }
     }

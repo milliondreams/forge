@@ -89,6 +89,7 @@ func FromGuildSpec(spec *protocol.GuildSpec, organizationID string) *GuildModel 
 		BackendModule:   backendModule,
 		BackendClass:    backendClass,
 		BackendConfig:   backendConfig,
+		Properties:      JSONB(spec.Properties),
 		Status:          GuildStatusPendingLaunch,
 	}
 
@@ -117,18 +118,21 @@ func FromGuildSpec(spec *protocol.GuildSpec, organizationID string) *GuildModel 
 }
 
 func ToGuildSpec(model *GuildModel) *protocol.GuildSpec {
+	properties := map[string]interface{}{}
+	for key, value := range model.Properties {
+		properties[key] = value
+	}
+	properties["execution_engine"] = model.ExecutionEngine
+	properties["messaging"] = map[string]interface{}{
+		"backend_module": model.BackendModule,
+		"backend_class":  model.BackendClass,
+		"backend_config": map[string]interface{}(model.BackendConfig),
+	}
 	spec := &protocol.GuildSpec{
 		ID:          model.ID,
 		Name:        model.Name,
 		Description: model.Description,
-		Properties: map[string]interface{}{
-			"execution_engine": model.ExecutionEngine,
-			"messaging": map[string]interface{}{
-				"backend_module": model.BackendModule,
-				"backend_class":  model.BackendClass,
-				"backend_config": map[string]interface{}(model.BackendConfig),
-			},
-		},
+		Properties:  properties,
 	}
 
 	if model.DependencyMap != nil {
@@ -180,6 +184,8 @@ func FromAgentSpec(spec *protocol.AgentSpec, guildID string) *AgentModel {
 		AdditionalTopics:       JSONBStringList(spec.AdditionalTopics),
 		AdditionalDependencies: JSONBStringList(spec.AdditionalDependencies),
 		ForgeExtraDeps:         JSONBStringList(spec.ForgeExtraDeps),
+		Resources:              structToJSONB(&spec.Resources),
+		QOS:                    structToJSONB(&spec.QOS),
 		Status:                 AgentStatusPendingLaunch,
 	}
 	if spec.Properties != nil {
@@ -189,8 +195,9 @@ func FromAgentSpec(spec *protocol.AgentSpec, guildID string) *AgentModel {
 	agentDeps := make(JSONB)
 	for k, v := range spec.DependencyMap {
 		agentDeps[k] = map[string]interface{}{
-			"class_name": v.ClassName,
-			"properties": v.Properties,
+			"class_name":    v.ClassName,
+			"provided_type": v.ProvidedType,
+			"properties":    v.Properties,
 		}
 	}
 	m.DependencyMap = agentDeps
@@ -224,6 +231,12 @@ func ToAgentSpec(model *AgentModel) *protocol.AgentSpec {
 		AdditionalDependencies: []string(model.AdditionalDependencies),
 		ForgeExtraDeps:         []string(model.ForgeExtraDeps),
 	}
+	if resources := jsonbToStruct[protocol.ResourceSpec](model.Resources); resources != nil {
+		spec.Resources = *resources
+	}
+	if qos := jsonbToStruct[protocol.QOSSpec](model.QOS); qos != nil {
+		spec.QOS = *qos
+	}
 	if model.Properties != nil {
 		spec.Properties = map[string]interface{}(model.Properties)
 	}
@@ -235,6 +248,9 @@ func ToAgentSpec(model *AgentModel) *protocol.AgentSpec {
 				ds := protocol.DependencySpec{}
 				if cn, _ := vm["class_name"].(string); cn != "" {
 					ds.ClassName = cn
+				}
+				if providedType, _ := vm["provided_type"].(string); providedType != "" {
+					ds.ProvidedType = providedType
 				}
 				if props, ok := vm["properties"].(map[string]interface{}); ok {
 					ds.Properties = props

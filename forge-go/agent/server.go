@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rustic-ai/forge/forge-go/api"
 	"github.com/rustic-ai/forge/forge-go/control"
+	"github.com/rustic-ai/forge/forge-go/dependencies"
 	"github.com/rustic-ai/forge/forge-go/embed"
 	"github.com/rustic-ai/forge/forge-go/filesystem"
 	"github.com/rustic-ai/forge/forge-go/forgepath"
@@ -33,6 +34,9 @@ import (
 const defaultEmbeddedRedisAddr = "127.0.0.1:6379"
 
 func StartServer(ctx context.Context, cfg *ServerConfig) error {
+	if err := dependencies.ValidateMode(cfg.ClientDependencyPrewarmMode); err != nil {
+		return err
+	}
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
 
@@ -361,21 +365,22 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 			clientMetricsAddr = ":9091"
 		}
 		clientCfg := &ClientConfig{
-			ServerURL:         clientServerURL,
-			RedisURL:          redisAddr,
-			NATSUrl:           natsURL,
-			DataDir:           cfg.DataDir,
-			CPUs:              cfg.ClientCPUs,
-			Memory:            cfg.ClientMemory,
-			GPUs:              cfg.ClientGPUs,
-			NodeID:            cfg.ClientNodeID,
-			MetricsAddr:       clientMetricsAddr,
-			DefaultSupervisor: cfg.ClientDefaultSupervisor,
-			DefaultTransport:  cfg.ClientDefaultTransport,
-			ZMQBridgeMode:     cfg.ClientZMQBridgeMode,
-			AttachProcessTree: true, // Embedded client: attach for reliable cleanup
-			StopAgentsOnExit:  true, // Embedded client: kill agents on server exit
-			OAuthManager:      httpServer.OAuthManager(),
+			ServerURL:             clientServerURL,
+			RedisURL:              redisAddr,
+			NATSUrl:               natsURL,
+			DataDir:               cfg.DataDir,
+			CPUs:                  cfg.ClientCPUs,
+			Memory:                cfg.ClientMemory,
+			GPUs:                  cfg.ClientGPUs,
+			NodeID:                cfg.ClientNodeID,
+			MetricsAddr:           clientMetricsAddr,
+			DefaultSupervisor:     cfg.ClientDefaultSupervisor,
+			DefaultTransport:      cfg.ClientDefaultTransport,
+			ZMQBridgeMode:         cfg.ClientZMQBridgeMode,
+			DependencyPrewarmMode: cfg.ClientDependencyPrewarmMode,
+			AttachProcessTree:     true, // Embedded client: attach for reliable cleanup
+			StopAgentsOnExit:      true, // Embedded client: kill agents on server exit
+			OAuthManager:          httpServer.OAuthManager(),
 		}
 		l.Info("In-process Forge client enabled",
 			"server_url", clientServerURL,

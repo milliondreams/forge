@@ -93,6 +93,8 @@ type AgentModel struct {
 	AdditionalDependencies JSONBStringList `gorm:"type:jsonb"`
 	ForgeExtraDeps         JSONBStringList `gorm:"type:jsonb"`
 	Predicates             JSONB           `gorm:"type:jsonb"`
+	Resources              JSONB           `gorm:"column:resources;type:jsonb"`
+	QOS                    JSONB           `gorm:"column:qos;type:jsonb"`
 	Status                 AgentStatus     `gorm:"default:not_launched"`
 
 	Guild *GuildModel `gorm:"foreignKey:GuildID;references:ID"` // Back reference
@@ -109,6 +111,8 @@ func (a *AgentModel) normalizeDefaults() {
 	ensureJSONBStringList(&a.AdditionalDependencies)
 	ensureJSONBStringList(&a.ForgeExtraDeps)
 	ensureJSONB(&a.Predicates)
+	ensureJSONB(&a.Resources)
+	ensureJSONB(&a.QOS)
 }
 
 type GuildModel struct {
@@ -119,6 +123,7 @@ type GuildModel struct {
 	BackendModule   string      `gorm:"default:rustic_ai.core.messaging.backend" json:"backend_module"`
 	BackendClass    string      `gorm:"default:InMemoryMessagingBackend" json:"backend_class"`
 	BackendConfig   JSONB       `gorm:"type:jsonb" json:"backend_config"`
+	Properties      JSONB       `gorm:"type:jsonb" json:"properties"`
 	OrganizationID  string      `gorm:"index;not null" json:"organization_id"`
 	DependencyMap   JSONB       `gorm:"type:jsonb" json:"dependency_map"`
 	Status          GuildStatus `gorm:"default:unknown" json:"status"`
@@ -133,6 +138,7 @@ func (GuildModel) TableName() string {
 
 func (g *GuildModel) normalizeDefaults() {
 	ensureJSONB(&g.BackendConfig)
+	ensureJSONB(&g.Properties)
 	ensureJSONB(&g.DependencyMap)
 	if g.Routes == nil {
 		g.Routes = []GuildRoutes{}

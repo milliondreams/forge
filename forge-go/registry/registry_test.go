@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/oauth"
@@ -68,6 +69,30 @@ func TestParseRegistry(t *testing.T) {
 	_, err = reg.Lookup("nonexistent.Agent")
 	if err == nil {
 		t.Fatal("Expected error looking up unknown class, got nil")
+	}
+}
+
+func TestBundledRegistryUsesStandaloneShowcaseAgentPackages(t *testing.T) {
+	reg, err := Load(filepath.Join("..", "conf", "forge-agent-registry.yaml"), nil)
+	if err != nil {
+		t.Fatalf("Load bundled registry: %v", err)
+	}
+
+	tests := []struct {
+		className string
+		pkg       string
+	}{
+		{"rustic_ai.fact_checker.agent.FactCheckerAgent", "rusticai-fact-checker"},
+		{"rustic_ai.research_manager.agent.ResearchManager", "rusticai-research-manager"},
+	}
+	for _, tt := range tests {
+		entry, err := reg.Lookup(tt.className)
+		if err != nil {
+			t.Fatalf("Lookup(%q): %v", tt.className, err)
+		}
+		if entry.Package != tt.pkg {
+			t.Errorf("Lookup(%q) package = %q, want %q", tt.className, entry.Package, tt.pkg)
+		}
 	}
 }
 
@@ -303,4 +328,15 @@ func TestResolveCommand_ForgeExtraDeps(t *testing.T) {
 			t.Errorf("binary runtime should not receive --with args: %v", cmd)
 		}
 	})
+}
+
+func TestDependencyRequirementsIncludesSystemBaselineAndAgentInputs(t *testing.T) {
+	t.Setenv("FORGE_PYTHON_PKG", "rusticai-forge==1.2.3")
+	t.Setenv("FORGE_EXTRA_DEPS", "global-a,global-b")
+	entry := &AgentRegistryEntry{Runtime: RuntimeUVX, Package: "agent-package", WithDependencies: []string{"with-package"}}
+	got := DependencyRequirements(entry, []string{"spec-a,spec-b"})
+	want := []string{"rusticai-forge==1.2.3", "rusticai-core", "with-package", "global-a", "global-b", "spec-a", "spec-b", "agent-package"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("requirements = %v, want %v", got, want)
+	}
 }

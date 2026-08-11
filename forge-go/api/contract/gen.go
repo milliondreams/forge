@@ -56,6 +56,30 @@ func (e CelPredicatePredicateType) Valid() bool {
 	}
 }
 
+// Defines values for DependencyAvailabilityStatus.
+const (
+	DependencyAvailabilityStatusNeedsConfiguration DependencyAvailabilityStatus = "needs_configuration"
+	DependencyAvailabilityStatusReady              DependencyAvailabilityStatus = "ready"
+	DependencyAvailabilityStatusUnavailable        DependencyAvailabilityStatus = "unavailable"
+	DependencyAvailabilityStatusUnknown            DependencyAvailabilityStatus = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the DependencyAvailabilityStatus enum.
+func (e DependencyAvailabilityStatus) Valid() bool {
+	switch e {
+	case DependencyAvailabilityStatusNeedsConfiguration:
+		return true
+	case DependencyAvailabilityStatusReady:
+		return true
+	case DependencyAvailabilityStatusUnavailable:
+		return true
+	case DependencyAvailabilityStatusUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FunctionalTransformerStyle.
 const (
 	FunctionalTransformerStyleContentBasedRouter FunctionalTransformerStyle = "content_based_router"
@@ -634,6 +658,18 @@ type CelPredicate struct {
 // CelPredicatePredicateType defines model for CelPredicate.PredicateType.
 type CelPredicatePredicateType string
 
+// ConfiguredDependencyEntry defines model for ConfiguredDependencyEntry.
+type ConfiguredDependencyEntry struct {
+	Aliases      []string               `json:"aliases"`
+	Availability DependencyAvailability `json:"availability"`
+	Capabilities []string               `json:"capabilities"`
+	Description  *string                `json:"description,omitempty"`
+	DisplayName  string                 `json:"display_name"`
+	Key          string                 `json:"key"`
+	ProvidedType string                 `json:"provided_type"`
+	Provider     *string                `json:"provider,omitempty"`
+}
+
 // CreateBoardRequest defines model for CreateBoardRequest.
 type CreateBoardRequest struct {
 	CreatedBy string `json:"created_by"`
@@ -650,6 +686,15 @@ type CreateSecretRequest struct {
 	// Value The secret value, base64-encoded (standard encoding).
 	Value string `json:"value"`
 }
+
+// DependencyAvailability defines model for DependencyAvailability.
+type DependencyAvailability struct {
+	Reasons []string                     `json:"reasons"`
+	Status  DependencyAvailabilityStatus `json:"status"`
+}
+
+// DependencyAvailabilityStatus defines model for DependencyAvailability.Status.
+type DependencyAvailabilityStatus string
 
 // DependencySpec defines model for DependencySpec.
 type DependencySpec struct {
@@ -1489,6 +1534,13 @@ type GetCategoryByIdParams struct {
 // GetBlueprintsByCategoryNameParams defines parameters for GetBlueprintsByCategoryName.
 type GetBlueprintsByCategoryNameParams struct {
 	Sqldb *string `form:"sqldb,omitempty" json:"sqldb,omitempty"`
+}
+
+// ListConfiguredDependenciesParams defines parameters for ListConfiguredDependencies.
+type ListConfiguredDependenciesParams struct {
+	ProvidedType       *string `form:"provided_type,omitempty" json:"provided_type,omitempty"`
+	Capability         *string `form:"capability,omitempty" json:"capability,omitempty"`
+	IncludeUnavailable *bool   `form:"include_unavailable,omitempty" json:"include_unavailable,omitempty"`
 }
 
 // GetBlueprintForGuildParams defines parameters for GetBlueprintForGuild.
@@ -2423,6 +2475,9 @@ type ServerInterface interface {
 	// GetBlueprintsByCategoryName Get Category Blueprints
 	// (GET /catalog/categories/{category}/blueprints/)
 	GetBlueprintsByCategoryName(c *gin.Context, category string, params GetBlueprintsByCategoryNameParams)
+	// ListConfiguredDependencies List Configured Dependencies
+	// (GET /catalog/dependencies)
+	ListConfiguredDependencies(c *gin.Context, params ListConfiguredDependenciesParams)
 	// GetBlueprintForGuild Get Blueprint For Guild
 	// (GET /catalog/guilds/{guild_id}/blueprints/)
 	GetBlueprintForGuild(c *gin.Context, guildId string, params GetBlueprintForGuildParams)
@@ -4054,6 +4109,49 @@ func (siw *ServerInterfaceWrapper) GetBlueprintsByCategoryName(c *gin.Context) {
 	siw.Handler.GetBlueprintsByCategoryName(c, category, params)
 }
 
+// ListConfiguredDependencies operation middleware
+func (siw *ServerInterfaceWrapper) ListConfiguredDependencies(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListConfiguredDependenciesParams
+
+	// ------------- Optional query parameter "provided_type" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "provided_type", c.Request.URL.Query(), &params.ProvidedType, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter provided_type: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "capability" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "capability", c.Request.URL.Query(), &params.Capability, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter capability: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "include_unavailable" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "include_unavailable", c.Request.URL.Query(), &params.IncludeUnavailable, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter include_unavailable: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListConfiguredDependencies(c, params)
+}
+
 // GetBlueprintForGuild operation middleware
 func (siw *ServerInterfaceWrapper) GetBlueprintForGuild(c *gin.Context) {
 
@@ -5000,6 +5098,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/catalog/categories/", wrapper.CreateCategory)
 	router.GET(options.BaseURL+"/catalog/categories/:category", wrapper.GetCategoryById)
 	router.GET(options.BaseURL+"/catalog/categories/:category/blueprints/", wrapper.GetBlueprintsByCategoryName)
+	router.GET(options.BaseURL+"/catalog/dependencies", wrapper.ListConfiguredDependencies)
 	router.GET(options.BaseURL+"/catalog/guilds/:guild_id/blueprints/", wrapper.GetBlueprintForGuild)
 	router.GET(options.BaseURL+"/catalog/guilds/:guild_id/users", wrapper.GetUsersAddedToGuild)
 	router.DELETE(options.BaseURL+"/catalog/guilds/:guild_id/users/:user_id", wrapper.RemoveUserFromGuild)
