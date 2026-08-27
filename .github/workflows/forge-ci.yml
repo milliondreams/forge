@@ -38,6 +38,19 @@ jobs:
           cache: true
           cache-dependency-path: forge-go/go.sum
 
+      - name: Download Go modules
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Go module download attempt $attempt failed; retrying..." >&2
+            sleep $((attempt * 5))
+          done
+
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
