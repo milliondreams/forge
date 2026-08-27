@@ -25,7 +25,7 @@ if err := agent.StartServer(ctx, cfg); err != nil { os.Exit(1) }
 Persistent flags apply to all three subcommands: `--log-level` (default `info`), `--log-format` (default `text`), and `--forge-home` (base data directory; falls back to `FORGE_HOME` env, then `~/.forge`). `forgepath.Resolve(sub)` derives every other path — the SQLite DSN, the data directory, config file locations — from this one root.
 
 !!! tip
-    `forge version` prints Forge Version, Git Commit, Build Date, Go Version, and OS/Arch. The Makefile injects real values via `-ldflags -X`; the in-source defaults (`Version="0.4.2"`, `GitCommit="none"`) only show up in a dev build that skipped `make build`.
+    `forge version` prints Forge Version, Git Commit, Build Date, Go Version, and OS/Arch. The Makefile injects real values via `-ldflags -X`; the in-source defaults (`Version="0.5.0"`, `GitCommit="none"`) only show up in a dev build that skipped `make build`.
 
 ## Control plane components
 

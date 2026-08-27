@@ -54,7 +54,7 @@ LDFLAGS := -ldflags "-s -w \
 ./bin/forge version
 ```
 
-This prints Forge Version, Git Commit, Build Date, Go Version, and OS/Arch — all sourced from `github.com/rustic-ai/forge/forge-go/version` fields set by the ldflags above (their unstamped defaults in source are `Version="0.4.2"`, `GitCommit="none"`, `BuildDate="unknown"`).
+This prints Forge Version, Git Commit, Build Date, Go Version, and OS/Arch — all sourced from `github.com/rustic-ai/forge/forge-go/version` fields set by the ldflags above (their unstamped defaults in source are `Version="0.5.0"`, `GitCommit="none"`, `BuildDate="unknown"`).
 
 !!! tip "Dirty checkouts are visible"
     `git describe --tags --always --dirty` appends `-dirty` to `VERSION` if you have uncommitted changes, so `forge version` output doubles as a quick sanity check on what you actually built.
