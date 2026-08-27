@@ -91,7 +91,8 @@ func TestUserCommsIngressMutation(t *testing.T) {
 		"topic":          "echo_topic",
 		"data": map[string]interface{}{
 			"messages": []interface{}{
-				map[string]interface{}{"role": "user", "content": []interface{}{map[string]interface{}{"type": "text", "text": "hello"}}},
+				map[string]interface{}{"role": "user", "name": "u1", "content": []interface{}{map[string]interface{}{"type": "text", "text": "hello"}}},
+				map[string]interface{}{"role": "user", "name": "Explicit Speaker", "content": "preserve me"},
 			},
 		},
 		"messageHistory": []interface{}{
@@ -140,6 +141,11 @@ func TestUserCommsIngressMutation(t *testing.T) {
 	assert.NotContains(t, wrappedPayload, "data")
 	assert.EqualValues(t, 789, wrappedPayload["conversation_id"])
 	assert.EqualValues(t, 42, wrappedPayload["in_response_to"])
+
+	chatPayload := wrappedPayload["payload"].(map[string]interface{})
+	messages := chatPayload["messages"].([]interface{})
+	assert.Equal(t, "Alice", messages[0].(map[string]interface{})["name"])
+	assert.Equal(t, "Explicit Speaker", messages[1].(map[string]interface{})["name"])
 
 	history, ok := wrappedPayload["message_history"].([]interface{})
 	require.True(t, ok)

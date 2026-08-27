@@ -69,6 +69,7 @@ func NewGormStore(driverName, dsn string) (Store, error) {
 		&BlueprintReview{}, &CatalogAgentEntry{}, &BlueprintAgentLink{},
 		&BlueprintGuild{}, &UserGuild{}, &AgentIcon{}, &BlueprintAgentIcon{},
 		&Board{}, &BoardMessage{},
+		&SecretMetadataModel{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate database schema: %w", err)
 	}
@@ -77,6 +78,26 @@ func NewGormStore(driverName, dsn string) (Store, error) {
 	}
 
 	return &gormStore{db: db}, nil
+}
+
+func (s *gormStore) Add(orgID, name string) error {
+	return s.db.Where(SecretMetadataModel{OrganizationID: orgID, Name: name}).FirstOrCreate(&SecretMetadataModel{OrganizationID: orgID, Name: name}).Error
+}
+
+func (s *gormStore) Remove(orgID, name string) bool {
+	result := s.db.Where("organization_id = ? AND name = ?", orgID, name).Delete(&SecretMetadataModel{})
+	return result.Error == nil && result.RowsAffected > 0
+}
+
+func (s *gormStore) Exists(orgID, name string) bool {
+	var count int64
+	return s.db.Model(&SecretMetadataModel{}).Where("organization_id = ? AND name = ?", orgID, name).Count(&count).Error == nil && count > 0
+}
+
+func (s *gormStore) List(orgID string) ([]string, error) {
+	var names []string
+	err := s.db.Model(&SecretMetadataModel{}).Where("organization_id = ?", orgID).Order("name ASC").Pluck("name", &names).Error
+	return names, err
 }
 
 func newGormLogger() gormlogger.Interface {

@@ -55,7 +55,12 @@ func (s *Server) handleOAuthListProviders() http.HandlerFunc {
 			ReplyError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		ReplyJSON(w, http.StatusOK, s.oauthManager.ListProviders(orgID, s.publicBaseURL()+oauthRoutePrefix(r)))
+		providers, err := s.oauthManager.ListProviders(orgID, s.publicBaseURL()+oauthRoutePrefix(r))
+		if err != nil {
+			ReplyError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ReplyJSON(w, http.StatusOK, providers)
 	}
 }
 
@@ -150,8 +155,13 @@ func (s *Server) handleOAuthStatus() http.HandlerFunc {
 			ReplyError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		connected, err := s.oauthManager.IsConnected(orgID, providerID)
+		if err != nil {
+			ReplyError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		ReplyJSON(w, http.StatusOK, map[string]bool{
-			"isConnected": s.oauthManager.IsConnected(orgID, providerID),
+			"isConnected": connected,
 		})
 	}
 }

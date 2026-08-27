@@ -154,6 +154,15 @@ type GuildRelaunchModel struct {
 	Timestamp time.Time `gorm:"autoCreateTime"`
 }
 
+// SecretMetadataModel intentionally stores only secret identity. Credential
+// values remain exclusively in the OS keychain.
+type SecretMetadataModel struct {
+	OrganizationID string `gorm:"primaryKey;index"`
+	Name           string `gorm:"primaryKey;index"`
+}
+
+func (SecretMetadataModel) TableName() string { return "secret_metadata" }
+
 func (GuildRelaunchModel) TableName() string {
 	return "guilds_relaunch"
 }

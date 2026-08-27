@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,8 +56,32 @@ func TestBundledDependencyProfilesUseCanonicalTypes(t *testing.T) {
 	}
 }
 
+func TestLegacyExactDependencyMatchAddsOnlyUniqueRequirements(t *testing.T) {
+	agent := protocol.NewAgentSpec()
+	agent.DependencyMap["llm"] = protocol.DependencySpec{
+		ClassName:  "example.Resolver",
+		Properties: map[string]interface{}{"model": "hosted"},
+	}
+	profiles := map[string]configuredDependencyProfile{
+		"hosted": {
+			ClassName: "example.Resolver", ProvidedType: llmType,
+			Properties:   map[string]interface{}{"model": "hosted"},
+			Requirements: dependencyRequirements{Secrets: []string{"HOSTED_API_KEY"}},
+		},
+	}
+	enrichAgentDependencyRequirements(&agent, profiles)
+	require.Equal(t, []string{"HOSTED_API_KEY"}, agent.Resources.Secrets)
+	require.Equal(t, []string{"hosted"}, agent.Properties[protocol.DependencyProfilesProperty])
+
+	profiles["ambiguous"] = profiles["hosted"]
+	agent.Resources.Secrets = nil
+	delete(agent.Properties, protocol.DependencyProfilesProperty)
+	enrichAgentDependencyRequirements(&agent, profiles)
+	require.Empty(t, agent.Resources.Secrets, "ambiguous legacy profiles must not be guessed")
+}
+
 func TestNomicProfileIsReturnedOnlyForEmbeddings(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "must-not-affect-readiness")
 	configPath := filepath.Join("..", "conf", "agent-dependencies.yaml")
 	embeddingProfiles, err := safeConfiguredDependencyEntries(configPath, embeddingsType, "", false)
 	require.NoError(t, err)
@@ -73,6 +99,21 @@ func TestNomicProfileIsReturnedOnlyForEmbeddings(t *testing.T) {
 			require.Equal(t, "needs_configuration", entry.Availability.Status)
 		}
 	}
+}
+
+func TestSecretDependentProfileReadinessComesOnlyFromNodes(t *testing.T) {
+	configPath := filepath.Join("..", "conf", "agent-dependencies.yaml")
+	t.Setenv("OPENAI_API_KEY", "ignored")
+
+	entries, err := safeConfiguredDependencyEntries(configPath, embeddingsType, "", false)
+	require.NoError(t, err)
+	require.NotContains(t, dependencyEntryKeys(entries), "embeddings")
+
+	scheduler.GlobalNodeRegistry.RegisterWithReadiness("dependency-profile-test", scheduler.ResourceCapacity{CPUs: 1, Memory: 1}, []string{"embeddings"})
+	t.Cleanup(func() { scheduler.GlobalNodeRegistry.Deregister("dependency-profile-test") })
+	entries, err = safeConfiguredDependencyEntries(configPath, embeddingsType, "", false)
+	require.NoError(t, err)
+	require.Contains(t, dependencyEntryKeys(entries), "embeddings")
 }
 
 func TestEveryCanonicalTypeCanBeQueried(t *testing.T) {

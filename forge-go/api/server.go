@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -34,6 +35,8 @@ type Server struct {
 	observeService *observeService
 	modelFit       *modelFitService
 	oauthManager   *oauth.Manager
+	oauthTokens    *oauth.CachedTokenStore
+	oauthClients   *oauth.CachedClientCredentialsStore
 	secretManager  *secrets.Manager
 	listenAddr     string
 	server         *http.Server
@@ -44,6 +47,7 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 	if mc != nil {
 		infraPublisher, _ = infraevents.NewPublisher(mc)
 	}
+	localUI := newLocalUIState()
 	s := &Server{
 		store:          db,
 		statusStore:    statusStore,
@@ -51,66 +55,101 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 		msgClient:      mc,
 		infraPublisher: infraPublisher,
 		fileStore:      fs,
-		localUI:        newLocalUIState(),
+		localUI:        localUI,
 		listenAddr:     listenAddr,
 	}
+	migrateLegacyLocalGuildMemberships(db, localUI.user.ID)
 	return s
 }
 
-// WithOAuth initialises OAuth support. Both store backends are selected from the
-// environment: FORGE_OAUTH_TOKEN_STORE for tokens and FORGE_OAUTH_CLIENT_STORE for
-// DCR client credentials, each "memory" (default) or "keychain".
-func (s *Server) WithOAuth() *Server {
-	kind := os.Getenv("FORGE_OAUTH_TOKEN_STORE")
+func migrateLegacyLocalGuildMemberships(db store.Store, userID string) {
+	if db == nil || userID == localDummyUserID {
+		return
+	}
+
+	legacyGuilds, err := db.GetGuildsForUser(localDummyUserID, nil, nil)
+	if err != nil {
+		slog.Warn("failed to read legacy local guild memberships", "err", err)
+		return
+	}
+	for _, guild := range legacyGuilds {
+		users, err := db.GetUsersForGuild(guild.ID)
+		if err != nil {
+			slog.Warn("failed to read guild users during local identity migration", "guild_id", guild.ID, "err", err)
+			continue
+		}
+		alreadyMember := false
+		for _, existingUserID := range users {
+			if existingUserID == userID {
+				alreadyMember = true
+				break
+			}
+		}
+		if alreadyMember {
+			continue
+		}
+		if err := db.AddUserToGuild(guild.ID, userID); err != nil {
+			slog.Warn("failed to migrate local guild membership", "guild_id", guild.ID, "user_id", userID, "err", err)
+		}
+	}
+}
+
+// WithSecureStores initializes all managed credential persistence against the
+// OS keychain. The supplied provider is used only for launch-time reads and may
+// include explicitly requested unsafe read-only fallbacks.
+func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	cfg, err := oauth.LoadProvidersConfig(forgepath.OAuthProvidersConfigPath())
 	if err != nil {
-		fmt.Printf("WARN: failed to load OAuth providers config: %v\n", err)
-		return s
+		return fmt.Errorf("load OAuth providers config: %w", err)
 	}
-	store, err := oauth.NewTokenStore(kind)
-	if err != nil {
-		fmt.Printf("WARN: %v; falling back to in-memory token store\n", err)
-		store, _ = oauth.NewTokenStore("memory")
-	}
-	// Client credentials use their own backend (empty -> in-memory).
-	credStore, err := oauth.NewClientCredentialsStore(os.Getenv("FORGE_OAUTH_CLIENT_STORE"))
-	if err != nil {
-		fmt.Printf("WARN: %v; falling back to in-memory client credentials store\n", err)
-		credStore, _ = oauth.NewClientCredentialsStore("memory")
-	}
+	store := oauth.NewCachedTokenStore(oauth.NewKeychainTokenStore())
+	credStore := oauth.NewCachedClientCredentialsStore(oauth.NewKeychainClientCredentialsStore())
+	s.oauthTokens = store
+	s.oauthClients = credStore
 	// FORGE_OAUTH_CLIENT_NAME / FORGE_OAUTH_CLIENT_URI override the client_name
 	// and client_uri registered with DCR providers; empty keeps the defaults
 	// (name "Forge", uri omitted).
 	s.oauthManager = oauth.NewManagerWithStores(cfg, store, credStore,
 		oauth.WithDynamicClient(os.Getenv("FORGE_OAUTH_CLIENT_NAME"), os.Getenv("FORGE_OAUTH_CLIENT_URI")))
 	keychain.SetOAuthManager(s.oauthManager)
-	return s
+	secretStore := secrets.NewKeychainSecretStore()
+	metadata, ok := s.store.(secrets.MetadataIndex)
+	if !ok {
+		return fmt.Errorf("metastore does not support secret metadata")
+	}
+	s.secretManager = secrets.NewManagerWithMetadata(secretStore, metadata, provider)
+	return nil
 }
 
-// OAuthManager returns the oauth.Manager initialised by WithOAuth, or nil if OAuth is not configured.
+func (s *Server) ClearSecureCaches() {
+	if s.oauthTokens != nil {
+		s.oauthTokens.Clear()
+	}
+	if s.oauthClients != nil {
+		s.oauthClients.Clear()
+	}
+	keychain.SetOAuthManager(nil)
+}
+
+// OAuthManager returns the manager initialized by WithSecureStores.
 func (s *Server) OAuthManager() *oauth.Manager {
 	return s.oauthManager
 }
 
-// WithSecrets initialises org-scoped secret management. The store backend is
-// selected from FORGE_SECRET_STORE ("memory" (default) or "keychain"), mirroring
-// the OAuth token store. With the keychain backend, secrets are stored under
-// "secret:orgID|name" and resolve through the keychain SecretProvider directly —
-// no delegation is needed since the stored value is the secret itself.
-func (s *Server) WithSecrets() *Server {
-	store, err := secrets.NewSecretStore(os.Getenv("FORGE_SECRET_STORE"))
-	if err != nil {
-		fmt.Printf("WARN: %v; falling back to in-memory secret store\n", err)
-		store, _ = secrets.NewSecretStore("memory")
-	}
-	s.secretManager = secrets.NewManager(store)
-	return s
-}
-
-// SecretManager returns the secrets.Manager initialised by WithSecrets, or nil
-// if secret management is not configured.
+// SecretManager returns the manager initialized by WithSecureStores.
 func (s *Server) SecretManager() *secrets.Manager {
 	return s.secretManager
+}
+
+// ReadyDependencyProfiles evaluates the embedded node against the value-free
+// local secret metadata index, avoiding keychain reads during registration.
+func (s *Server) ReadyDependencyProfiles(configPath string) ([]string, error) {
+	if s.secretManager == nil {
+		return nil, fmt.Errorf("secret manager is not configured")
+	}
+	return ReadyDependencyProfileKeys(configPath, func(name string) (bool, error) {
+		return s.secretManager.Exists(localDummyOrgID, name), nil
+	})
 }
 
 func (s *Server) WithObservability(mode, sqliteDBPath string) *Server {

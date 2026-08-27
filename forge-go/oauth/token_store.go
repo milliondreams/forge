@@ -9,20 +9,20 @@ import (
 // Implement this interface to swap in keychain, encrypted DB, or other backends.
 type TokenStore interface {
 	Save(orgID, providerID string, entry *tokenEntry) error
-	Load(orgID, providerID string) (*tokenEntry, bool)
+	Load(orgID, providerID string) (*tokenEntry, bool, error)
 	Delete(orgID, providerID string) bool
 }
 
 // NewTokenStore creates a TokenStore by name. Supported backends:
-//   - "memory" (default): in-process store, tokens lost on restart.
-//   - "keychain": OS keychain (macOS Keychain, Windows Credential Manager,
-//     Linux Secret Service). Set FORGE_OAUTH_TOKEN_STORE=keychain to activate.
+//   - "keychain" (default): OS keychain (macOS Keychain, Windows Credential
+//     Manager, Linux Secret Service).
+//   - "memory": test-only in-process store, tokens lost on restart.
 func NewTokenStore(kind string) (TokenStore, error) {
 	switch kind {
-	case "", "memory":
-		return NewInMemoryTokenStore(), nil
-	case "keychain":
+	case "", "keychain":
 		return NewKeychainTokenStore(), nil
+	case "memory":
+		return NewInMemoryTokenStore(), nil
 	default:
 		return nil, fmt.Errorf("unknown oauth token store %q; supported: memory, keychain", kind)
 	}
@@ -46,11 +46,11 @@ func (s *InMemoryTokenStore) Save(orgID, providerID string, entry *tokenEntry) e
 	return nil
 }
 
-func (s *InMemoryTokenStore) Load(orgID, providerID string) (*tokenEntry, bool) {
+func (s *InMemoryTokenStore) Load(orgID, providerID string) (*tokenEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.tokens[StoreKey(orgID, providerID)]
-	return e, ok
+	return e, ok, nil
 }
 
 func (s *InMemoryTokenStore) Delete(orgID, providerID string) bool {

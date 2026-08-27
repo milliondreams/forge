@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -102,6 +103,21 @@ agents:
 		return nil
 	}), "server did not become ready")
 
+	catalogBody, err := json.Marshal(map[string]interface{}{
+		"qualified_class_name": parsedSpec.Agents[0].ClassName,
+		"agent_name":           parsedSpec.Agents[0].Name,
+		"agent_props_schema":   map[string]interface{}{"type": "object"},
+		"message_handlers":     map[string]interface{}{},
+		"agent_dependencies":   []interface{}{},
+	})
+	require.NoError(t, err)
+	catalogResp, err := http.Post(baseURL+"/catalog/agents", "application/json", bytes.NewReader(catalogBody))
+	require.NoError(t, err)
+	catalogRespBody, err := io.ReadAll(catalogResp.Body)
+	require.NoError(t, err)
+	require.NoError(t, catalogResp.Body.Close())
+	require.Equal(t, http.StatusCreated, catalogResp.StatusCode, "agent registration failed: %s", string(catalogRespBody))
+
 	var redisHost, redisPort string
 	addr := mr.Addr()
 	for i := len(addr) - 1; i >= 0; i-- {
@@ -114,6 +130,17 @@ agents:
 	if redisHost == "" {
 		redisHost = "localhost"
 	}
+	agentRedisHost := redisHost
+	managerAPIBaseURL := baseURL
+	if runtime.GOOS == "darwin" {
+		agentRedisHost = "host.docker.internal"
+		_, serverPort, splitErr := net.SplitHostPort(serverHTTPAddr)
+		require.NoError(t, splitErr)
+		managerAPIBaseURL = "http://" + net.JoinHostPort("host.docker.internal", serverPort)
+	}
+	t.Setenv("REDIS_HOST", agentRedisHost)
+	t.Setenv("REDIS_PORT", redisPort)
+	t.Setenv("FORGE_MANAGER_API_BASE_URL", managerAPIBaseURL)
 
 	forgePythonPath, _ := filepath.Abs(filepath.Join(pwd, "..", "..", "forge-python"))
 	registryPath, _ := filepath.Abs(filepath.Join(pwd, "..", "conf", "forge-agent-registry.yaml"))
@@ -138,7 +165,7 @@ agents:
 		"FORGE_AGENT_REGISTRY="+registryPath,
 		"FORGE_PYTHON_PKG="+forgePythonPath,
 		"PYTHONUNBUFFERED=1",
-		"REDIS_HOST="+redisHost,
+		"REDIS_HOST="+agentRedisHost,
 		"REDIS_PORT="+redisPort,
 		"FORGE_INJECT_FS="+forgePythonPath+":rw,"+dbDir+":rw",
 		"FORGE_INJECT_NET=host",

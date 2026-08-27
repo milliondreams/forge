@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/rustic-ai/forge/forge-go/forgepath"
@@ -11,9 +12,6 @@ import (
 // KeychainClientCredentialsStore persists DCR-issued client credentials in the
 // OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service
 // via libsecret), namespaced separately from OAuth tokens.
-//
-// It is selected independently of the token store: set
-// FORGE_OAUTH_CLIENT_STORE=keychain.
 type KeychainClientCredentialsStore struct {
 	service string
 }
@@ -37,16 +35,19 @@ func (s *KeychainClientCredentialsStore) SaveCredentials(providerID string, c *c
 	return nil
 }
 
-func (s *KeychainClientCredentialsStore) LoadCredentials(providerID string) (*clientCredentials, bool) {
+func (s *KeychainClientCredentialsStore) LoadCredentials(providerID string) (*clientCredentials, bool, error) {
 	data, err := keyring.Get(s.service, clientStoreKey(providerID))
 	if err != nil {
-		return nil, false
+		if errors.Is(err, keyring.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("loading client credentials from keychain: %w", err)
 	}
 	var c clientCredentials
 	if err := json.Unmarshal([]byte(data), &c); err != nil {
-		return nil, false
+		return nil, false, fmt.Errorf("parsing client credentials from keychain: %w", err)
 	}
-	return &c, true
+	return &c, true, nil
 }
 
 func (s *KeychainClientCredentialsStore) DeleteCredentials(providerID string) bool {

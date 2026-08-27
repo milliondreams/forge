@@ -120,7 +120,7 @@ func materializeBlueprintDependencySelections(
 			if !exists || !profileMatchesAnnotation(key, profile, annotation) {
 				return fmt.Errorf("profile %q is not allowed for configuration field %q", key, fieldName)
 			}
-			availability := profile.availability()
+			availability := profile.availability(key)
 			if availability.Status != "ready" {
 				return fmt.Errorf("profile %q is unavailable: %s", key, strings.Join(availability.Reasons, ", "))
 			}
@@ -134,6 +134,7 @@ func materializeBlueprintDependencySelections(
 					return fmt.Errorf("dependency selection conflicts with existing binding for agent %q dependency %q", annotation.Target.AgentID, annotation.Target.DependencyKey)
 				}
 				agent.DependencyMap[annotation.Target.DependencyKey] = runtimeSpec
+				appendUniqueSecrets(&agent.Resources, profile.Requirements.Secrets...)
 				bindingKey := "agent:" + annotation.Target.AgentID + ":" + annotation.Target.DependencyKey
 				if legacy, exists := legacyBindings[bindingKey]; exists && legacy != key {
 					return fmt.Errorf("dependency_bindings conflicts with configuration field %q", fieldName)
@@ -159,6 +160,9 @@ func materializeBlueprintDependencySelections(
 	}
 	if len(snapshots) > 0 {
 		spec.Properties["dependency_selections"] = snapshots
+	}
+	for index := range spec.Agents {
+		enrichAgentDependencyRequirements(&spec.Agents[index], profiles)
 	}
 	return nil
 }

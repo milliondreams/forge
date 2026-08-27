@@ -75,3 +75,19 @@ func TestScheduler_BestFit(t *testing.T) {
 		t.Fatalf("Expected error scheduling agent demanding 32 CPUs but it succeeded")
 	}
 }
+
+func TestScheduler_RequiresReportedDependencyProfiles(t *testing.T) {
+	r := NewNodeRegistry()
+	r.RegisterWithReadiness("local-only", ResourceCapacity{CPUs: 4, Memory: 4096}, []string{"llm_local_qwen"})
+	r.RegisterWithReadiness("hosted", ResourceCapacity{CPUs: 2, Memory: 2048}, []string{"llm_openai"})
+
+	agent := protocol.NewAgentSpec()
+	agent.Properties[protocol.DependencyProfilesProperty] = []string{"llm_openai"}
+	nodeID, err := NewScheduler(r).Schedule(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeID != "hosted" {
+		t.Fatalf("expected hosted-ready node, got %q", nodeID)
+	}
+}

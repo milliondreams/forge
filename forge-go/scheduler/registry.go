@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,10 +16,11 @@ type ResourceCapacity struct {
 }
 
 type NodeState struct {
-	NodeID        string           `json:"node_id"`
-	TotalCapacity ResourceCapacity `json:"total_capacity"`
-	UsedCapacity  ResourceCapacity `json:"used_capacity"`
-	LastHeartbeat time.Time        `json:"last_heartbeat"`
+	NodeID                  string           `json:"node_id"`
+	TotalCapacity           ResourceCapacity `json:"total_capacity"`
+	UsedCapacity            ResourceCapacity `json:"used_capacity"`
+	ReadyDependencyProfiles []string         `json:"ready_dependency_profiles"`
+	LastHeartbeat           time.Time        `json:"last_heartbeat"`
 }
 
 type NodeRegistry struct {
@@ -32,24 +35,34 @@ func NewNodeRegistry() *NodeRegistry {
 }
 
 func (r *NodeRegistry) Register(nodeID string, capacity ResourceCapacity) {
+	r.RegisterWithReadiness(nodeID, capacity, nil)
+}
+
+func (r *NodeRegistry) RegisterWithReadiness(nodeID string, capacity ResourceCapacity, profiles []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if state, exists := r.nodes[nodeID]; exists {
 		state.TotalCapacity = capacity
+		state.ReadyDependencyProfiles = normalizedProfileKeys(profiles)
 		state.LastHeartbeat = time.Now()
 	} else {
 		r.nodes[nodeID] = &NodeState{
-			NodeID:        nodeID,
-			TotalCapacity: capacity,
-			UsedCapacity:  ResourceCapacity{},
-			LastHeartbeat: time.Now(),
+			NodeID:                  nodeID,
+			TotalCapacity:           capacity,
+			UsedCapacity:            ResourceCapacity{},
+			ReadyDependencyProfiles: normalizedProfileKeys(profiles),
+			LastHeartbeat:           time.Now(),
 		}
 	}
 	r.recordMetricsLocked()
 }
 
 func (r *NodeRegistry) Heartbeat(nodeID string) bool {
+	return r.HeartbeatWithReadiness(nodeID, nil, false)
+}
+
+func (r *NodeRegistry) HeartbeatWithReadiness(nodeID string, profiles []string, update bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -58,9 +71,58 @@ func (r *NodeRegistry) Heartbeat(nodeID string) bool {
 		telemetry.ObserveNodeHeartbeatLatency(nodeID, latency)
 
 		state.LastHeartbeat = time.Now()
+		if update {
+			state.ReadyDependencyProfiles = normalizedProfileKeys(profiles)
+		}
 		return true
 	}
 
+	return false
+}
+
+func normalizedProfileKeys(profiles []string) []string {
+	seen := make(map[string]struct{}, len(profiles))
+	result := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		profile = strings.TrimSpace(profile)
+		if profile == "" {
+			continue
+		}
+		if _, exists := seen[profile]; exists {
+			continue
+		}
+		seen[profile] = struct{}{}
+		result = append(result, profile)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func nodeReadyFor(state *NodeState, required []string) bool {
+	ready := make(map[string]struct{}, len(state.ReadyDependencyProfiles))
+	for _, key := range state.ReadyDependencyProfiles {
+		ready[key] = struct{}{}
+	}
+	for _, key := range required {
+		if _, exists := ready[key]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *NodeRegistry) AnyHealthyNodeReadyFor(required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	for _, state := range r.nodes {
+		if now.Sub(state.LastHeartbeat) < 10*time.Second && nodeReadyFor(state, required) {
+			return true
+		}
+	}
 	return false
 }
 

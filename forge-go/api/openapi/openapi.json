@@ -3283,6 +3283,12 @@
                       "memory"
                     ],
                     "type": "object"
+                  },
+                  "ready_dependency_profiles": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -3316,6 +3322,24 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ready_dependency_profiles": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
         "responses": {
           "200": {
             "description": "Successful Response"
@@ -3332,7 +3356,34 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {},
+                  "items": {
+                    "properties": {
+                      "node_id": { "type": "string" },
+                      "total_capacity": {
+                        "properties": {
+                          "cpus": { "type": "integer" },
+                          "memory": { "type": "integer" },
+                          "gpus": { "type": "integer" }
+                        },
+                        "type": "object"
+                      },
+                      "used_capacity": {
+                        "properties": {
+                          "cpus": { "type": "integer" },
+                          "memory": { "type": "integer" },
+                          "gpus": { "type": "integer" }
+                        },
+                        "type": "object"
+                      },
+                      "ready_dependency_profiles": {
+                        "items": { "type": "string" },
+                        "type": "array"
+                      },
+                      "last_heartbeat": { "format": "date-time", "type": "string" }
+                    },
+                    "required": ["node_id", "total_capacity", "used_capacity", "ready_dependency_profiles", "last_heartbeat"],
+                    "type": "object"
+                  },
                   "type": "array"
                 }
               }

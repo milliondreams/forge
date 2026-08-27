@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,6 +22,23 @@ func TestNodeHeartbeatHandler_UnknownNodeReturnsNotFound(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rr.Code)
+	}
+}
+
+func TestNodeHeartbeatHandler_UpdatesReadiness(t *testing.T) {
+	orig := scheduler.GlobalNodeRegistry
+	t.Cleanup(func() { scheduler.GlobalNodeRegistry = orig })
+	scheduler.GlobalNodeRegistry = scheduler.NewNodeRegistry()
+	scheduler.GlobalNodeRegistry.RegisterWithReadiness("node-1", scheduler.ResourceCapacity{CPUs: 2, Memory: 1024}, []string{"old"})
+
+	req := httptest.NewRequest(http.MethodPost, "/nodes/node-1/heartbeat", bytes.NewBufferString(`{"ready_dependency_profiles":["new"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("node_id", "node-1")
+	rr := httptest.NewRecorder()
+	NodeHeartbeatHandler(rr, req)
+
+	if rr.Code != http.StatusOK || !scheduler.GlobalNodeRegistry.AnyHealthyNodeReadyFor([]string{"new"}) || scheduler.GlobalNodeRegistry.AnyHealthyNodeReadyFor([]string{"old"}) {
+		t.Fatalf("heartbeat did not replace readiness, status=%d nodes=%#v", rr.Code, scheduler.GlobalNodeRegistry.ListHealthy())
 	}
 }
 

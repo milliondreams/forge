@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,7 +138,7 @@ func TestDotEnvSecretProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultProvider_PreferenceOrder(t *testing.T) {
+func TestProviderChain_PreferenceOrderIsExplicit(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
 
@@ -154,7 +155,13 @@ func TestDefaultProvider_PreferenceOrder(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	provider := DefaultProvider()
+	provider, names, unsafe, err := NewProviderChain("env,dotenv,file")
+	if err != nil {
+		t.Fatalf("NewProviderChain failed: %v", err)
+	}
+	if !unsafe || strings.Join(names, ",") != "env,dotenv,file" {
+		t.Fatalf("unexpected parsed chain: names=%v unsafe=%v", names, unsafe)
+	}
 
 	val, err := provider.Resolve(ctx, "SHARED_KEY")
 	if err != nil {
@@ -166,6 +173,7 @@ func TestDefaultProvider_PreferenceOrder(t *testing.T) {
 
 	_ = os.Setenv("SHARED_KEY", "env_value")
 	defer func() { _ = os.Unsetenv("SHARED_KEY") }()
+	provider.Clear()
 
 	val, err = provider.Resolve(ctx, "SHARED_KEY")
 	if err != nil {
@@ -173,5 +181,24 @@ func TestDefaultProvider_PreferenceOrder(t *testing.T) {
 	}
 	if val != "env_value" {
 		t.Fatalf("Expected env_value to override dotenv and file, got %s", val)
+	}
+}
+
+func TestParseProviderChain_DefaultAndValidation(t *testing.T) {
+	t.Setenv("FORGE_SECRET_PROVIDERS", "env,file")
+	names, unsafe, err := ParseProviderChain("")
+	if err != nil || unsafe || len(names) != 1 || names[0] != "keychain" {
+		t.Fatalf("empty input must remain keychain-only despite environment: names=%v unsafe=%v err=%v", names, unsafe, err)
+	}
+
+	names, unsafe, err = ParseProviderChain(" keychain, env,keychain ")
+	if err != nil || !unsafe || strings.Join(names, ",") != "keychain,env" {
+		t.Fatalf("unexpected normalized chain: names=%v unsafe=%v err=%v", names, unsafe, err)
+	}
+
+	for _, invalid := range []string{",", "keychain,", "unknown"} {
+		if _, _, err := ParseProviderChain(invalid); err == nil {
+			t.Fatalf("expected %q to be rejected", invalid)
+		}
 	}
 }

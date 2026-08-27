@@ -133,14 +133,22 @@ func (s *Server) HandleGetHistoricalMessages(w http.ResponseWriter, r *http.Requ
 	}
 
 	ctx := r.Context()
-	userNotifTopic := fmt.Sprintf("user_notifications:%s", userID)
 	broadcastTopic := "user_message_broadcast"
 
-	userMsgs, err := s.msgClient.GetMessagesForTopic(ctx, guildID, userNotifTopic)
-	if err != nil {
-		slog.Error("failed to get user messages", "err", err, "topic", userNotifTopic)
-		ReplyError(w, http.StatusInternalServerError, "failed to get user messages")
-		return
+	userIDs := []string{userID}
+	if s.localUI != nil && userID == s.localUI.user.ID && userID != localDummyUserID {
+		userIDs = append(userIDs, localDummyUserID)
+	}
+	var userMsgs []protocol.Message
+	for _, historyUserID := range userIDs {
+		userNotifTopic := fmt.Sprintf("user_notifications:%s", historyUserID)
+		messages, err := s.msgClient.GetMessagesForTopic(ctx, guildID, userNotifTopic)
+		if err != nil {
+			slog.Error("failed to get user messages", "err", err, "topic", userNotifTopic)
+			ReplyError(w, http.StatusInternalServerError, "failed to get user messages")
+			return
+		}
+		userMsgs = append(userMsgs, messages...)
 	}
 
 	broadcastMsgs, err := s.msgClient.GetMessagesForTopic(ctx, guildID, broadcastTopic)
@@ -150,7 +158,10 @@ func (s *Server) HandleGetHistoricalMessages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	socketAgentID := fmt.Sprintf("user_socket:%s", userID)
+	socketAgentIDs := make(map[string]bool, len(userIDs))
+	for _, historyUserID := range userIDs {
+		socketAgentIDs[fmt.Sprintf("user_socket:%s", historyUserID)] = true
+	}
 
 	userMsgIDs := make(map[uint64]bool)
 	for _, msg := range userMsgs {
@@ -170,7 +181,7 @@ func (s *Server) HandleGetHistoricalMessages(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 
-		if msg.ForwardHeader.OnBehalfOf.ID != nil && *msg.ForwardHeader.OnBehalfOf.ID == socketAgentID {
+		if msg.ForwardHeader.OnBehalfOf.ID != nil && socketAgentIDs[*msg.ForwardHeader.OnBehalfOf.ID] {
 			continue
 		}
 

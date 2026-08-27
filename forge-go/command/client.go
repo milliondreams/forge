@@ -27,6 +27,8 @@ var (
 	clientZMQBridgeMode     string
 	clientUVPython          string
 	clientDependencyPrewarm string
+	clientDependencyConfig  string
+	clientSecretProviders   string
 )
 
 func init() {
@@ -44,6 +46,8 @@ func init() {
 	ClientCmd.Flags().StringVar(&clientZMQBridgeMode, "zmq-bridge-mode", "ipc", `ZMQ bridge transport for non-process supervisors: "ipc" or "tcp"`)
 	ClientCmd.Flags().StringVar(&clientUVPython, "uv-python", "", `Python interpreter to pin uv/uvx to when spawning Python agents (e.g. "3.13" or ">=3.13,<3.14"); empty lets uv choose`)
 	ClientCmd.Flags().StringVar(&clientDependencyPrewarm, "client-dependency-prewarm", "off", `Dependency preparation mode for this client ("off" or "guild")`)
+	ClientCmd.Flags().StringVar(&clientDependencyConfig, "dependency-config", forgepath.DefaultDependencyConfigPath, "Path to dependency map config used to report profile readiness")
+	ClientCmd.Flags().StringVar(&clientSecretProviders, "secret-providers", "keychain", "Ordered runtime secret provider chain (keychain,env,dotenv,file); non-keychain providers are unsafe")
 
 	RootCmd.AddCommand(ClientCmd)
 }
@@ -52,6 +56,9 @@ var ClientCmd = &cobra.Command{
 	Use:   "client",
 	Short: "Start a Forge distributed compute node",
 	Long:  `Starts a client daemon that connects to the server and accepts agent spawn requests.`,
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
+		return validateSecretProviderFlag(cmd, clientSecretProviders)
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		out := os.Stdout
 		l := logging.NewLogger(out, logLevel)
@@ -91,6 +98,8 @@ var ClientCmd = &cobra.Command{
 			DefaultTransport:      clientDefaultTransport,
 			ZMQBridgeMode:         clientZMQBridgeMode,
 			DependencyPrewarmMode: clientDependencyPrewarm,
+			DependencyConfig:      clientDependencyConfig,
+			SecretProviders:       clientSecretProviders,
 		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

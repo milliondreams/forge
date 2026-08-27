@@ -208,7 +208,7 @@ func (p *BubblewrapSupervisor) startProcess(ctx context.Context, guildID string,
 	defer span.End()
 
 	cmd := exec.CommandContext(ctx, "bwrap", bwrapArgs...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = agentProcessEnvironment(env)
 
 	propagator := otel.GetTextMapPropagator()
 	carrier := propagation.MapCarrier{}

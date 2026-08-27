@@ -21,6 +21,7 @@ var (
 	serverManagerAPIBase          string
 	serverDataDir                 string
 	serverDependencyConfig        string
+	serverSecretProviders         string
 	serverWithClient              bool
 	serverClientNodeID            string
 	serverClientMetrics           string
@@ -54,6 +55,7 @@ func init() {
 	ServerCmd.Flags().StringVar(&serverManagerAPIBase, "manager-api-base-url", "", "Externally reachable Forge manager API base URL (e.g. http://forge.example.com:9090)")
 	ServerCmd.Flags().StringVar(&serverDataDir, "data-dir", "", "Base path for central file storage (default: <forge-home>/data)")
 	ServerCmd.Flags().StringVar(&serverDependencyConfig, "dependency-config", forgepath.DefaultDependencyConfigPath, "Path to dependency map config")
+	ServerCmd.Flags().StringVar(&serverSecretProviders, "secret-providers", "keychain", "Ordered runtime secret provider chain (keychain,env,dotenv,file); non-keychain providers are unsafe")
 	ServerCmd.Flags().BoolVar(&serverWithClient, "with-client", false, "Start an in-process Forge client/node")
 	ServerCmd.Flags().StringVar(&serverClientNodeID, "client-node-id", "", "Node ID for in-process client (default: hostname)")
 	ServerCmd.Flags().StringVar(&serverClientMetrics, "client-metrics-addr", ":9091", "Metrics bind address for in-process client")
@@ -84,6 +86,9 @@ var ServerCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the Forge distributed server",
 	Long:  `Starts the server core with an HTTP API, metastore, and central queue management.`,
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
+		return validateSecretProviderFlag(cmd, serverSecretProviders)
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		out := os.Stdout
 		l := logging.NewLogger(out, logLevel)
@@ -115,6 +120,7 @@ var ServerCmd = &cobra.Command{
 			ManagerAPIBaseURL:           serverManagerAPIBase,
 			DataDir:                     dataDir,
 			DependencyConfig:            serverDependencyConfig,
+			SecretProviders:             serverSecretProviders,
 			WithClient:                  serverWithClient,
 			ClientNodeID:                serverClientNodeID,
 			ClientMetricsAddr:           serverClientMetrics,

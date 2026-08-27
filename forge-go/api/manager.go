@@ -212,6 +212,12 @@ func (s *Server) HandleManagerEnsureAgent(w http.ResponseWriter, r *http.Request
 		ReplyError(w, http.StatusUnprocessableEntity, "agent id is required")
 		return
 	}
+	profiles, err := loadConfiguredDependencyProfiles(dependencyConfigPath())
+	if err != nil {
+		ReplyError(w, http.StatusInternalServerError, "failed to load dependency requirements")
+		return
+	}
+	enrichAgentDependencyRequirements(&spec, profiles)
 
 	if existing, err := s.store.GetAgent(guildID, spec.ID); err == nil {
 		if !agentSpecsEquivalent(store.ToAgentSpec(existing), &spec) {

@@ -26,6 +26,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/scheduler"
 	"github.com/rustic-ai/forge/forge-go/scheduler/leader"
+	"github.com/rustic-ai/forge/forge-go/secrets"
 	"github.com/rustic-ai/forge/forge-go/supervisor"
 	"github.com/rustic-ai/forge/forge-go/telemetry"
 	"github.com/rustic-ai/forge/forge-go/version"
@@ -43,6 +44,14 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	l := slog.Default()
 	defer l.Info("Forge server completely shut down")
 	l.Info("Starting Forge distributed server", "listen", cfg.ListenAddress)
+	secretProvider, providerNames, unsafeProviders, err := secrets.NewProviderChain(cfg.SecretProviders)
+	if err != nil {
+		return fmt.Errorf("configure secret providers: %w", err)
+	}
+	defer secretProvider.Clear()
+	if unsafeProviders {
+		l.Warn("UNSAFE SECRET PROVIDERS ENABLED; runtime credentials may be read outside the OS keychain", "providers", strings.Join(providerNames, ","))
+	}
 
 	driverName, dbDSN := store.ResolveDriverAndDSN(cfg.DatabaseURL)
 	l.Info("Connecting to database", "url", cfg.DatabaseURL, "driver", driverName)
@@ -342,9 +351,11 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 
 	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress).
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
-		WithModelFit("", cfg.DependencyConfig, nil).
-		WithOAuth().
-		WithSecrets()
+		WithModelFit("", cfg.DependencyConfig, nil)
+	if err := httpServer.WithSecureStores(secretProvider); err != nil {
+		return fmt.Errorf("initialize secure stores: %w", err)
+	}
+	defer httpServer.ClearSecureCaches()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -359,28 +370,40 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 		embeddedClientNodeID string
 	)
 	if cfg.WithClient {
+		readyProfiles, err := httpServer.ReadyDependencyProfiles(cfg.DependencyConfig)
+		if err != nil {
+			return fmt.Errorf("evaluate embedded client dependency readiness: %w", err)
+		}
 		clientServerURL := deriveManagerAPIBaseURL(cfg.ListenAddress, "")
 		clientMetricsAddr := strings.TrimSpace(cfg.ClientMetricsAddr)
 		if clientMetricsAddr == "" {
 			clientMetricsAddr = ":9091"
 		}
 		clientCfg := &ClientConfig{
-			ServerURL:             clientServerURL,
-			RedisURL:              redisAddr,
-			NATSUrl:               natsURL,
-			DataDir:               cfg.DataDir,
-			CPUs:                  cfg.ClientCPUs,
-			Memory:                cfg.ClientMemory,
-			GPUs:                  cfg.ClientGPUs,
-			NodeID:                cfg.ClientNodeID,
-			MetricsAddr:           clientMetricsAddr,
-			DefaultSupervisor:     cfg.ClientDefaultSupervisor,
-			DefaultTransport:      cfg.ClientDefaultTransport,
-			ZMQBridgeMode:         cfg.ClientZMQBridgeMode,
-			DependencyPrewarmMode: cfg.ClientDependencyPrewarmMode,
-			AttachProcessTree:     true, // Embedded client: attach for reliable cleanup
-			StopAgentsOnExit:      true, // Embedded client: kill agents on server exit
-			OAuthManager:          httpServer.OAuthManager(),
+			ServerURL:               clientServerURL,
+			RedisURL:                redisAddr,
+			NATSUrl:                 natsURL,
+			DataDir:                 cfg.DataDir,
+			CPUs:                    cfg.ClientCPUs,
+			Memory:                  cfg.ClientMemory,
+			GPUs:                    cfg.ClientGPUs,
+			NodeID:                  cfg.ClientNodeID,
+			MetricsAddr:             clientMetricsAddr,
+			DefaultSupervisor:       cfg.ClientDefaultSupervisor,
+			DefaultTransport:        cfg.ClientDefaultTransport,
+			ZMQBridgeMode:           cfg.ClientZMQBridgeMode,
+			DependencyPrewarmMode:   cfg.ClientDependencyPrewarmMode,
+			AttachProcessTree:       true, // Embedded client: attach for reliable cleanup
+			StopAgentsOnExit:        true, // Embedded client: kill agents on server exit
+			OAuthManager:            httpServer.OAuthManager(),
+			SecretProvider:          secretProvider,
+			SecretProviders:         cfg.SecretProviders,
+			DependencyConfig:        cfg.DependencyConfig,
+			ReadyDependencyProfiles: readyProfiles,
+			ReadinessProvided:       true,
+			ReadinessProvider: func() ([]string, error) {
+				return httpServer.ReadyDependencyProfiles(cfg.DependencyConfig)
+			},
 		}
 		l.Info("In-process Forge client enabled",
 			"server_url", clientServerURL,

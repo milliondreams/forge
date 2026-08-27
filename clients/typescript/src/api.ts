@@ -607,6 +607,10 @@ export interface QOSSpec {
 export interface RegisterNodeRequest {
     'node_id': string;
     'capacity': RegisterNodeRequestCapacity;
+    'ready_dependency_profiles'?: Array<string>;
+}
+export interface NodeHeartbeatRequest {
+    'ready_dependency_profiles'?: Array<string>;
 }
 export interface RegisterNodeRequestCapacity {
     'cpus': number;
@@ -4242,7 +4246,7 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        nodeHeartbeat: async (nodeId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        nodeHeartbeat: async (nodeId: string, nodeHeartbeatRequest?: NodeHeartbeatRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'nodeId' is not null or undefined
             assertParamExists('nodeHeartbeat', 'nodeId', nodeId)
             const localVarPath = `/nodes/{node_id}/heartbeat`
@@ -4259,9 +4263,11 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
             const localVarQueryParameter = {} as any;
 
 
+            localVarHeaderParameter['Content-Type'] = 'application/json';
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(nodeHeartbeatRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -4788,8 +4794,8 @@ export const DefaultApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async nodeHeartbeat(nodeId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.nodeHeartbeat(nodeId, options);
+        async nodeHeartbeat(nodeId: string, nodeHeartbeatRequest?: NodeHeartbeatRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.nodeHeartbeat(nodeId, nodeHeartbeatRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['DefaultApi.nodeHeartbeat']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -5087,7 +5093,7 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
          * @throws {RequiredError}
          */
         nodeHeartbeat(requestParameters: DefaultApiNodeHeartbeatRequest, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.nodeHeartbeat(requestParameters.nodeId, options).then((request) => request(axios, basePath));
+            return localVarFp.nodeHeartbeat(requestParameters.nodeId, requestParameters.nodeHeartbeatRequest, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -5295,6 +5301,7 @@ export interface DefaultApiListFilesForGuildRequest {
  */
 export interface DefaultApiNodeHeartbeatRequest {
     readonly nodeId: string
+    readonly nodeHeartbeatRequest?: NodeHeartbeatRequest
 }
 
 /**
@@ -5578,7 +5585,7 @@ export class DefaultApi extends BaseAPI {
      * @throws {RequiredError}
      */
     public nodeHeartbeat(requestParameters: DefaultApiNodeHeartbeatRequest, options?: RawAxiosRequestConfig) {
-        return DefaultApiFp(this.configuration).nodeHeartbeat(requestParameters.nodeId, options).then((request) => request(this.axios, this.basePath));
+        return DefaultApiFp(this.configuration).nodeHeartbeat(requestParameters.nodeId, requestParameters.nodeHeartbeatRequest, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -7699,6 +7706,3 @@ export class UsersApi extends BaseAPI {
         return UsersApiFp(this.configuration).removeUserFromGuild(requestParameters.guildId, requestParameters.userId, requestParameters.sqldb, options).then((request) => request(this.axios, this.basePath));
     }
 }
-
-
-

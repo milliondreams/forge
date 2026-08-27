@@ -53,10 +53,6 @@ entries:
     package: rusticai-llm-agent
     with_dependencies:
       - rusticai-litellm
-    secrets:
-      - OPENAI_API_KEY
-      - ANTHROPIC_API_KEY
-      - GEMINI_API_KEY
   - id: ReActAgent
     class_name: rustic_ai.llm_agent.react.react_agent.ReActAgent
     description: ReAct loop reasoning agent
@@ -64,10 +60,6 @@ entries:
     package: rusticai-llm-agent
     with_dependencies:
       - rusticai-litellm
-    secrets:
-      - OPENAI_API_KEY
-      - ANTHROPIC_API_KEY
-      - GEMINI_API_KEY
   - id: ClaudeCodeAgent
     class_name: rustic_ai.claude.agent.ClaudeCodeAgent
     description: Claude specialized coding agent

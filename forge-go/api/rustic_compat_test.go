@@ -72,6 +72,8 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_UI_API", "true")
 	t.Setenv("FORGE_IDENTITY_MODE", "local")
 	t.Setenv("FORGE_QUOTA_MODE", "local")
+	t.Setenv(localUserIDEnvVar, "local-user-123")
+	t.Setenv(localUserNameEnvVar, "Alice")
 
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
@@ -101,7 +103,7 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 
 	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:dummyuserid", &msg))
 
-	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/dummyuserid/messages", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/local-user-123/messages", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)

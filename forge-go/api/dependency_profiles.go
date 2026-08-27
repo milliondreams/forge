@@ -3,10 +3,12 @@ package api
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/scheduler"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,20 +38,66 @@ func (p configuredDependencyProfile) selectable() bool {
 }
 
 func (p configuredDependencyProfile) runtimeSpec() protocol.DependencySpec {
-	return protocol.DependencySpec{ClassName: p.ClassName, Properties: p.Properties}
+	return protocol.DependencySpec{ClassName: p.ClassName, ProvidedType: p.ProvidedType, Properties: p.Properties}
 }
 
-func (p configuredDependencyProfile) availability() DependencyAvailability {
-	reasons := make([]string, 0)
-	for _, secret := range p.Requirements.Secrets {
-		if strings.TrimSpace(os.Getenv(secret)) == "" {
-			reasons = append(reasons, "missing "+secret)
+func appendUniqueSecrets(resources *protocol.ResourceSpec, names ...string) {
+	seen := make(map[string]struct{}, len(resources.Secrets)+len(names))
+	result := make([]string, 0, len(resources.Secrets)+len(names))
+	for _, name := range append(append([]string{}, resources.Secrets...), names...) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	resources.Secrets = result
+}
+
+// enrichAgentDependencyRequirements adds requirements only when a dependency
+// exactly and uniquely matches a configured profile. This preserves legacy
+// explicit dependency specs without guessing between similar profiles.
+func enrichAgentDependencyRequirements(agent *protocol.AgentSpec, profiles map[string]configuredDependencyProfile) {
+	profileKeys := make([]string, 0)
+	for _, dependency := range agent.DependencyMap {
+		type profileMatch struct {
+			key     string
+			profile configuredDependencyProfile
+		}
+		matches := make([]profileMatch, 0, 1)
+		for key, profile := range profiles {
+			if dependencyMatchesProfile(dependency, profile) {
+				matches = append(matches, profileMatch{key: key, profile: profile})
+			}
+		}
+		if len(matches) == 1 {
+			appendUniqueSecrets(&agent.Resources, matches[0].profile.Requirements.Secrets...)
+			profileKeys = append(profileKeys, matches[0].key)
 		}
 	}
-	if len(reasons) > 0 {
-		return DependencyAvailability{Status: "needs_configuration", Reasons: reasons}
+	if len(profileKeys) > 0 {
+		sort.Strings(profileKeys)
+		agent.Properties[protocol.DependencyProfilesProperty] = profileKeys
 	}
-	return DependencyAvailability{Status: "ready", Reasons: []string{}}
+}
+
+func dependencyMatchesProfile(dependency protocol.DependencySpec, profile configuredDependencyProfile) bool {
+	runtimeSpec := profile.runtimeSpec()
+	if dependency.ClassName != runtimeSpec.ClassName || !reflect.DeepEqual(dependency.Properties, runtimeSpec.Properties) {
+		return false
+	}
+	return dependency.ProvidedType == "" || dependency.ProvidedType == runtimeSpec.ProvidedType
+}
+
+func (p configuredDependencyProfile) availability(key string) DependencyAvailability {
+	if len(p.Requirements.Secrets) == 0 || scheduler.GlobalNodeRegistry.AnyHealthyNodeReadyFor([]string{key}) {
+		return DependencyAvailability{Status: "ready", Reasons: []string{}}
+	}
+	return DependencyAvailability{Status: "needs_configuration", Reasons: []string{"not ready on any eligible node"}}
 }
 
 func (p configuredDependencyProfile) publicEntry(key string) ConfiguredDependencyEntry {
@@ -65,7 +113,7 @@ func (p configuredDependencyProfile) publicEntry(key string) ConfiguredDependenc
 		Provider:     p.Catalog.Provider,
 		Capabilities: append([]string{}, p.Catalog.Capabilities...),
 		Aliases:      append([]string{}, p.Catalog.Aliases...),
-		Availability: p.availability(),
+		Availability: p.availability(key),
 	}
 }
 
@@ -102,7 +150,7 @@ func safeConfiguredDependencyEntries(configPath, providedType, capability string
 		if !profile.selectable() || (providedType != "" && profile.ProvidedType != providedType) {
 			continue
 		}
-		if !includeUnavailable && profile.availability().Status != "ready" {
+		if !includeUnavailable && profile.availability(key).Status != "ready" {
 			continue
 		}
 		if capability != "" && !containsFold(profile.Catalog.Capabilities, capability) {
@@ -116,6 +164,34 @@ func safeConfiguredDependencyEntries(configPath, providedType, capability string
 		out = append(out, profiles[key].publicEntry(key))
 	}
 	return out, nil
+}
+
+// ReadyDependencyProfileKeys evaluates a node's configured profiles without
+// exposing requirement names in node registration payloads.
+func ReadyDependencyProfileKeys(configPath string, secretExists func(string) (bool, error)) ([]string, error) {
+	profiles, err := loadConfiguredDependencyProfiles(configPath)
+	if err != nil {
+		return nil, err
+	}
+	ready := make([]string, 0, len(profiles))
+	for key, profile := range profiles {
+		isReady := true
+		for _, name := range profile.Requirements.Secrets {
+			exists, err := secretExists(name)
+			if err != nil {
+				return nil, fmt.Errorf("check requirement for profile %q: %w", key, err)
+			}
+			if !exists {
+				isReady = false
+				break
+			}
+		}
+		if isReady {
+			ready = append(ready, key)
+		}
+	}
+	sort.Strings(ready)
+	return ready, nil
 }
 
 func containsFold(values []string, target string) bool {

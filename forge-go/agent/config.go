@@ -1,6 +1,9 @@
 package agent
 
-import "github.com/rustic-ai/forge/forge-go/oauth"
+import (
+	"github.com/rustic-ai/forge/forge-go/oauth"
+	"github.com/rustic-ai/forge/forge-go/secrets"
+)
 
 type ServerConfig struct {
 	DatabaseURL                 string
@@ -13,6 +16,7 @@ type ServerConfig struct {
 	ManagerAPIBaseURL           string
 	DataDir                     string
 	DependencyConfig            string
+	SecretProviders             string
 	WithClient                  bool
 	ClientNodeID                string
 	ClientMetricsAddr           string
@@ -39,20 +43,26 @@ type ServerConfig struct {
 }
 
 type ClientConfig struct {
-	ServerURL             string
-	RedisURL              string
-	NATSUrl               string
-	DataDir               string
-	CPUs                  int
-	Memory                int
-	GPUs                  int
-	NodeID                string
-	MetricsAddr           string
-	DefaultSupervisor     string
-	DefaultTransport      string
-	ZMQBridgeMode         string
-	AttachProcessTree     bool
-	StopAgentsOnExit      bool
-	OAuthManager          *oauth.Manager
-	DependencyPrewarmMode string
+	ServerURL               string
+	RedisURL                string
+	NATSUrl                 string
+	DataDir                 string
+	CPUs                    int
+	Memory                  int
+	GPUs                    int
+	NodeID                  string
+	MetricsAddr             string
+	DefaultSupervisor       string
+	DefaultTransport        string
+	ZMQBridgeMode           string
+	AttachProcessTree       bool
+	StopAgentsOnExit        bool
+	OAuthManager            *oauth.Manager
+	SecretProvider          *secrets.CachedProvider
+	SecretProviders         string
+	DependencyConfig        string
+	ReadyDependencyProfiles []string
+	ReadinessProvided       bool
+	ReadinessProvider       func() ([]string, error)
+	DependencyPrewarmMode   string
 }

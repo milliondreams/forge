@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -85,12 +86,16 @@ func TestLevel1_EchoAgentIntegration(t *testing.T) {
 			if guildSpec.Properties == nil {
 				guildSpec.Properties = make(map[string]interface{})
 			}
+			redisHost := mr.Host()
+			if reqSup == "docker" && runtime.GOOS == "darwin" {
+				redisHost = "host.docker.internal"
+			}
 			guildSpec.Properties["messaging"] = map[string]interface{}{
 				"backend_module": "rustic_ai.redis.messaging.backend",
 				"backend_class":  "RedisMessagingBackend",
 				"backend_config": map[string]interface{}{
 					"redis_client": map[string]interface{}{
-						"host": mr.Host(),
+						"host": redisHost,
 						"port": mr.Port(),
 						"db":   0,
 					},

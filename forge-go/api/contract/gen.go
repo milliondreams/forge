@@ -1614,7 +1614,13 @@ type RegisterNodeJSONBody struct {
 		Gpus   *int `json:"gpus,omitempty"`
 		Memory int  `json:"memory"`
 	} `json:"capacity"`
-	NodeId string `json:"node_id"`
+	NodeId                  string    `json:"node_id"`
+	ReadyDependencyProfiles *[]string `json:"ready_dependency_profiles,omitempty"`
+}
+
+// NodeHeartbeatJSONBody defines parameters for NodeHeartbeat.
+type NodeHeartbeatJSONBody struct {
+	ReadyDependencyProfiles *[]string `json:"ready_dependency_profiles,omitempty"`
 }
 
 // OauthCallbackParams defines parameters for OauthCallback.
@@ -1665,6 +1671,9 @@ type CreateCategoryJSONRequestBody = BlueprintCategoryCreate
 
 // RegisterNodeJSONRequestBody defines body for RegisterNode for application/json ContentType.
 type RegisterNodeJSONRequestBody RegisterNodeJSONBody
+
+// NodeHeartbeatJSONRequestBody defines body for NodeHeartbeat for application/json ContentType.
+type NodeHeartbeatJSONRequestBody NodeHeartbeatJSONBody
 
 // AuthorizeOAuthProviderJSONRequestBody defines body for AuthorizeOAuthProvider for application/json ContentType.
 type AuthorizeOAuthProviderJSONRequestBody = AuthorizeRequest

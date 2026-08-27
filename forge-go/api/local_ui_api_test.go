@@ -39,6 +39,45 @@ func TestBuildRouter_LocalIdentityAndQuotaRoutes(t *testing.T) {
 	require.Equal(t, float64(25), quota["limit"])
 }
 
+func TestNewLocalUIStateUsesValidatedConfiguredIdentity(t *testing.T) {
+	t.Setenv(localUserIDEnvVar, "local-user_123")
+	t.Setenv(localUserNameEnvVar, "Rohit Example")
+
+	state := newLocalUIState()
+	require.Equal(t, "local-user_123", state.user.ID)
+	require.Equal(t, "Rohit Example", state.user.FullName)
+}
+
+func TestNewLocalUIStateRejectsUnsafeConfiguredIdentity(t *testing.T) {
+	t.Setenv(localUserIDEnvVar, `DOMAIN\\John Smith`)
+
+	state := newLocalUIState()
+	require.Equal(t, localDummyUserID, state.user.ID)
+}
+
+func TestBuildRouter_LocalIdentitySearchResolvesLegacyUser(t *testing.T) {
+	t.Setenv("FORGE_ENABLE_PUBLIC_API", "true")
+	t.Setenv("FORGE_ENABLE_UI_API", "false")
+	t.Setenv("FORGE_IDENTITY_MODE", "local")
+	t.Setenv("FORGE_QUOTA_MODE", "local")
+	t.Setenv(localUserIDEnvVar, "rohit")
+	t.Setenv(localUserNameEnvVar, "Rohit Example")
+
+	s := &Server{localUI: newLocalUIState()}
+	router := s.buildRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/users/search?userIds=dummyuserid,rohit", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var users []localUserInfo
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &users))
+	require.Equal(t, []localUserInfo{
+		{ID: localDummyUserID, FullName: "Rohit Example", Email: "anonymous@example.com"},
+		{ID: "rohit", FullName: "Rohit Example", Email: "anonymous@example.com"},
+	}, users)
+}
+
 func TestBuildRouter_LocalIdentityUsersSearchEmptyIDsReturnsEmptyList(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_PUBLIC_API", "true")
 	t.Setenv("FORGE_ENABLE_UI_API", "false")

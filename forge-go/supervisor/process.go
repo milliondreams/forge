@@ -196,7 +196,7 @@ func (p *ProcessSupervisor) startProcess(ctx context.Context, guildID string, ag
 		}
 		p.setBridge(guildID, agent.ID, bridge)
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = agentProcessEnvironment(env)
 
 	propagator := otel.GetTextMapPropagator()
 	carrier := propagation.MapCarrier{}

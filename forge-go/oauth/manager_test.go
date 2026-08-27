@@ -250,11 +250,11 @@ func TestDisconnect_KeepsGlobalDCRClient(t *testing.T) {
 		t.Fatal("expected Disconnect to report a removed token")
 	}
 	// Token is gone...
-	if m.IsConnected("org1", "mcp") {
+	if connected, err := m.IsConnected("org1", "mcp"); err != nil || connected {
 		t.Error("expected org token to be removed after Disconnect")
 	}
 	// ...but the deployment-global client is retained for other orgs.
-	if _, ok := m.credStore.LoadCredentials("mcp"); !ok {
+	if _, ok, err := m.credStore.LoadCredentials("mcp"); err != nil || !ok {
 		t.Error("expected DCR client credentials to survive Disconnect")
 	}
 }
