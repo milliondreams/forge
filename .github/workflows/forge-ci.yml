@@ -29,19 +29,20 @@ jobs:
         working-directory: ./forge-go
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: forge-go/go.mod
           cache: true
+          cache-dependency-path: forge-go/go.sum
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
-          install-mode: goinstall
+          version: v2.13.1
+          install-mode: binary
           working-directory: forge-go
           args: --timeout=5m
 
@@ -71,13 +72,14 @@ jobs:
       run:
         working-directory: ./forge-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: forge-go/go.mod
           cache: true
+          cache-dependency-path: forge-go/go.sum
 
       - name: Build (native)
         run: go build -o bin/forge ./main.go
@@ -111,19 +113,28 @@ jobs:
         working-directory: ./forge-go
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: forge-go/go.mod
           cache: true
+          cache-dependency-path: forge-go/go.sum
 
       - name: Cross compile
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-            go build -o dist/forge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} ./main.go
+          for attempt in 1 2 3; do
+            if GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+              go build -o dist/forge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} ./main.go; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Upload cross-build artifacts
         uses: actions/upload-artifact@v4
@@ -137,7 +148,7 @@ jobs:
       run:
         working-directory: ./forge-python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -169,12 +180,13 @@ jobs:
   contract-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: forge-go/go.mod
+          cache-dependency-path: forge-go/go.sum
 
       - name: Set up Python
         uses: actions/setup-python@v5

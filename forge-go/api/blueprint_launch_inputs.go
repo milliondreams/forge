@@ -189,15 +189,16 @@ func validateDependencyAnnotation(s store.Store, bp *store.Blueprint, fieldName 
 	if annotation.RequiredType == "" || annotation.Target.DependencyKey == "" {
 		return fmt.Errorf("configuration field %q has incomplete dependency annotation", fieldName)
 	}
-	if annotation.Selection == "single" {
+	switch annotation.Selection {
+	case "single":
 		if property["type"] != "string" {
 			return fmt.Errorf("configuration field %q single selection must be a string", fieldName)
 		}
-	} else if annotation.Selection == "multiple" {
+	case "multiple":
 		if property["type"] != "array" || property["uniqueItems"] != true {
 			return fmt.Errorf("configuration field %q multiple selection must be an array with uniqueItems", fieldName)
 		}
-	} else {
+	default:
 		return fmt.Errorf("configuration field %q has unsupported selection %q", fieldName, annotation.Selection)
 	}
 	valueShape := annotation.ValueShape
