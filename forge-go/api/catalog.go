@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/rustic-ai/forge/forge-go/guild"
@@ -31,6 +31,7 @@ func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.Co
 	mux.HandleFunc("GET /catalog/blueprints", handleListBlueprints(s))
 	mux.HandleFunc("GET /catalog/blueprints/{id}", handleGetBlueprint(s))
 	mux.HandleFunc("GET /catalog/blueprints/{blueprint_id}/dependencies", handleGetBlueprintDependencies(s))
+	mux.HandleFunc("GET /catalog/dependencies", handleListConfiguredDependencies())
 	mux.HandleFunc("GET /catalog/users/{user_id}/blueprints/accessible", handleGetAccessibleBlueprints(s))
 	mux.HandleFunc("GET /catalog/organizations/{org_id}/blueprints/owned", handleGetOrganizationOwnedBlueprints(s))
 	mux.HandleFunc("GET /catalog/users/{user_id}/blueprints/owned", handleGetUserOwnedBlueprints(s))
@@ -227,6 +228,13 @@ func validateBlueprintSpecForCreate(spec map[string]interface{}, s store.Store) 
 				}
 			}
 		}
+	}
+
+	if err := validateBlueprintDependencyAnnotations(
+		s,
+		&store.Blueprint{Spec: store.JSONB(spec)},
+	); err != nil {
+		return fmt.Errorf("invalid blueprint dependency input: %w", err)
 	}
 
 	// Validate spec via GuildBuilder (matches Python's GuildBuilder.from_spec())
@@ -952,7 +960,19 @@ func handleListConfiguredDependencies() http.HandlerFunc {
 			providedType = strings.TrimSpace(r.URL.Query().Get("provided_type"))
 		}
 
-		deps, err := loadConfiguredDependencyEntries(dependencyConfigPath(), providedType)
+		includeUnavailable := false
+		if raw := strings.TrimSpace(r.URL.Query().Get("include_unavailable")); raw != "" {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				ReplyError(w, http.StatusBadRequest, "include_unavailable must be a boolean")
+				return
+			}
+			includeUnavailable = parsed
+		}
+
+		deps, err := safeConfiguredDependencyEntries(
+			dependencyConfigPath(), providedType, strings.TrimSpace(r.URL.Query().Get("capability")), includeUnavailable,
+		)
 		if err != nil {
 			ReplyError(w, http.StatusInternalServerError, "failed to load configured dependencies: "+err.Error())
 			return
@@ -999,8 +1019,12 @@ func resolveBlueprintDependencies(s store.Store, bp *store.Blueprint, configPath
 			resp := catalogAgentToResponse(entry)
 			for _, dep := range resp.AgentDependencies {
 				providers := []ConfiguredDependencyEntry{}
-				if dep.ResolvedType != nil {
-					providers = append(providers, byProvidedType[*dep.ResolvedType]...)
+				requiredType := dep.RequiredType
+				if requiredType == nil {
+					requiredType = dep.ResolvedType
+				}
+				if requiredType != nil {
+					providers = append(providers, byProvidedType[*requiredType]...)
 				}
 				summary.Dependencies = append(summary.Dependencies, BlueprintAgentDependencyEntry{
 					BindingKey:    blueprintDependencyBindingKey(agent.ID, dep),
@@ -1010,6 +1034,7 @@ func resolveBlueprintDependencies(s store.Store, bp *store.Blueprint, configPath
 					OrgLevel:      dep.OrgLevel,
 					AgentLevel:    dep.AgentLevel,
 					VariableName:  dep.VariableName,
+					RequiredType:  requiredType,
 					ResolvedType:  dep.ResolvedType,
 					Providers:     providers,
 				})
@@ -1124,41 +1149,7 @@ func applyBlueprintDependencyBindings(
 }
 
 func loadConfiguredDependencyEntries(configPath, providedType string) ([]ConfiguredDependencyEntry, error) {
-	fileData, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []ConfiguredDependencyEntry{}, nil
-		}
-		return nil, fmt.Errorf("read dependency config: %w", err)
-	}
-
-	var fileDeps map[string]protocol.DependencySpec
-	if err := yaml.Unmarshal(fileData, &fileDeps); err != nil {
-		return nil, fmt.Errorf("parse dependency config: %w", err)
-	}
-
-	keys := make([]string, 0, len(fileDeps))
-	for key, spec := range fileDeps {
-		spec.Normalize()
-		if providedType != "" && spec.ProvidedType != providedType {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	out := make([]ConfiguredDependencyEntry, 0, len(keys))
-	for _, key := range keys {
-		spec := fileDeps[key]
-		spec.Normalize()
-		out = append(out, ConfiguredDependencyEntry{
-			Key:          key,
-			ClassName:    spec.ClassName,
-			ProvidedType: spec.ProvidedType,
-			Properties:   spec.Properties,
-		})
-	}
-	return out, nil
+	return safeConfiguredDependencyEntries(configPath, providedType, "", false)
 }
 
 func loadConfiguredDependencySpecsByKey(configPath string) (map[string]protocol.DependencySpec, error) {
@@ -1196,6 +1187,9 @@ func catalogAgentToResponse(a *store.CatalogAgentEntry) AgentEntryResponse {
 			var dep AgentDependencyEntry
 			if err := json.Unmarshal(raw, &dep); err != nil {
 				continue
+			}
+			if dep.RequiredType == nil {
+				dep.RequiredType = dep.ResolvedType
 			}
 			deps = append(deps, dep)
 		}
@@ -1413,6 +1407,12 @@ func handleLaunchGuildFromBlueprint(s store.Store, pusher protocol.ControlPusher
 		guildSpec.Name = req.GuildName
 		if req.Description != nil {
 			guildSpec.Description = *req.Description
+		}
+		if err := materializeBlueprintDependencySelections(
+			s, blueprint, &guildSpec, guildSpec.Configuration, req.DependencyBindings, dependencyConfigPath(),
+		); err != nil {
+			ReplyError(w, http.StatusUnprocessableEntity, "invalid dependency selection: "+err.Error())
+			return
 		}
 		if err := applyBlueprintDependencyBindings(s, blueprint, &guildSpec, req.DependencyBindings, dependencyConfigPath()); err != nil {
 			ReplyError(w, http.StatusUnprocessableEntity, "invalid dependency_bindings: "+err.Error())

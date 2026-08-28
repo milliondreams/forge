@@ -9,8 +9,13 @@ import (
 )
 
 type NodeRegistrationRequest struct {
-	NodeID   string                     `json:"node_id"`
-	Capacity scheduler.ResourceCapacity `json:"capacity"`
+	NodeID                  string                     `json:"node_id"`
+	Capacity                scheduler.ResourceCapacity `json:"capacity"`
+	ReadyDependencyProfiles []string                   `json:"ready_dependency_profiles"`
+}
+
+type NodeHeartbeatRequest struct {
+	ReadyDependencyProfiles []string `json:"ready_dependency_profiles"`
 }
 
 func RegisterNodeHandler(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +30,7 @@ func RegisterNodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheduler.GlobalNodeRegistry.Register(req.NodeID, req.Capacity)
+	scheduler.GlobalNodeRegistry.RegisterWithReadiness(req.NodeID, req.Capacity, req.ReadyDependencyProfiles)
 	slog.Default().Info("Node registered", "node_id", req.NodeID, "cpus", req.Capacity.CPUs, "memory", req.Capacity.Memory)
 
 	w.WriteHeader(http.StatusCreated)
@@ -38,7 +43,16 @@ func NodeHeartbeatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok := scheduler.GlobalNodeRegistry.Heartbeat(nodeID); !ok {
+	var req NodeHeartbeatRequest
+	updateReadiness := r.ContentLength != 0
+	if updateReadiness {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			ReplyError(w, http.StatusUnprocessableEntity, "invalid request body")
+			return
+		}
+	}
+
+	if ok := scheduler.GlobalNodeRegistry.HeartbeatWithReadiness(nodeID, req.ReadyDependencyProfiles, updateReadiness); !ok {
 		ReplyError(w, http.StatusNotFound, "unknown node")
 		return
 	}

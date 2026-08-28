@@ -132,8 +132,8 @@ func TestExchangeCode_SendsResourceParam(t *testing.T) {
 		t.Errorf("token request resource = %q, want %q", got, resource)
 	}
 	// Stored so the refresh can repeat it.
-	entry, ok := m.store.Load("org1", "api")
-	if !ok {
+	entry, ok, err := m.store.Load("org1", "api")
+	if err != nil || !ok {
 		t.Fatal("expected a stored token entry")
 	}
 	if entry.resource != resource {
@@ -188,7 +188,7 @@ func TestGetAccessToken_RefreshSendsResourceParam(t *testing.T) {
 			t.Errorf("refresh_token = %q, want it forwarded intact", got)
 		}
 		// The response omitted refresh_token, so the old one must survive.
-		entry, _ := m.store.Load("org1", "api")
+		entry, _, _ := m.store.Load("org1", "api")
 		if entry.token.RefreshToken != "the-refresh-token" {
 			t.Errorf("stored refresh token = %q, want it preserved", entry.token.RefreshToken)
 		}

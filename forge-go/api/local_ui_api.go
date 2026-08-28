@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +15,14 @@ import (
 )
 
 const (
-	localDummyUserID = "dummyuserid"
-	localDummyOrgID  = "acmeorganizationid"
+	localDummyUserID    = "dummyuserid"
+	localDummyOrgID     = "acmeorganizationid"
+	localUserIDEnvVar   = "FORGE_LOCAL_USER_ID"
+	localUserNameEnvVar = "FORGE_LOCAL_USER_NAME"
+	localAnonymousUser  = "Anonymous User"
 )
+
+var validLocalUserID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 type localUserInfo struct {
 	ID       string `json:"id"`
@@ -97,10 +104,19 @@ type localUIState struct {
 }
 
 func newLocalUIState() *localUIState {
+	userID := strings.TrimSpace(os.Getenv(localUserIDEnvVar))
+	if !validLocalUserID.MatchString(userID) {
+		userID = localDummyUserID
+	}
+	userName := strings.TrimSpace(os.Getenv(localUserNameEnvVar))
+	if userName == "" {
+		userName = localAnonymousUser
+	}
+
 	return &localUIState{
 		user: localUserInfo{
-			ID:       localDummyUserID,
-			FullName: "Anonymous User",
+			ID:       userID,
+			FullName: userName,
 			Email:    "anonymous@example.com",
 		},
 		org: localOrganizationInfo{
@@ -185,6 +201,10 @@ func (s *Server) registerLocalIdentityRoutes(router gin.IRouter) {
 		for _, id := range userIDs {
 			if id == s.localUI.user.ID {
 				resp = append(resp, s.localUI.user)
+			} else if id == localDummyUserID && s.localUI.user.ID != localDummyUserID {
+				legacyUser := s.localUI.user
+				legacyUser.ID = localDummyUserID
+				resp = append(resp, legacyUser)
 			}
 		}
 		c.JSON(http.StatusOK, resp)
@@ -331,7 +351,7 @@ func (s *Server) registerLocalQuotaRoutes(router gin.IRouter) {
 			return
 		}
 		s.localUI.mu.Lock()
-		applyQuotaUpdate(&s.localUI.guildQuota, req, localDummyUserID)
+		applyQuotaUpdate(&s.localUI.guildQuota, req, s.localUI.user.ID)
 		s.localUI.mu.Unlock()
 		c.JSON(http.StatusOK, gin.H{"message": "Updated chat quota successfully"})
 	})
@@ -357,7 +377,7 @@ func (s *Server) registerLocalQuotaRoutes(router gin.IRouter) {
 			return
 		}
 		s.localUI.mu.Lock()
-		applyQuotaUpdate(&s.localUI.orgQuota, req, localDummyUserID)
+		applyQuotaUpdate(&s.localUI.orgQuota, req, s.localUI.user.ID)
 		s.localUI.mu.Unlock()
 		c.JSON(http.StatusOK, gin.H{"message": "Updated quota successfully"})
 	})
@@ -376,7 +396,7 @@ func (s *Server) registerLocalQuotaRoutes(router gin.IRouter) {
 			return
 		}
 		s.localUI.mu.Lock()
-		applyQuotaUpdate(&s.localUI.orgUsersQuota, req, localDummyUserID)
+		applyQuotaUpdate(&s.localUI.orgUsersQuota, req, s.localUI.user.ID)
 		s.localUI.mu.Unlock()
 		c.JSON(http.StatusOK, gin.H{"message": "Updated org users quota successfully"})
 	})
@@ -400,7 +420,7 @@ func (s *Server) registerRusticUIRoutes(router gin.IRouter, gemGen *protocol.Gem
 		wsID := idgen.NewShortUUID()
 		s.localUI.setWSSession(wsID, wsBootstrapSession{
 			guildID: guildID,
-			userID:  localDummyUserID,
+			userID:  s.localUI.user.ID,
 			user:    userName,
 			expires: time.Now().Add(30 * time.Minute),
 		})

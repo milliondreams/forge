@@ -837,7 +837,7 @@ wheels = [
 
 [[package]]
 name = "rusticai-forge"
-version = "0.4.6"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

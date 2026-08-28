@@ -4,10 +4,30 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestBundledAgentDependenciesDeclareRequiredTypes(t *testing.T) {
+	agents, err := loadKnownSystemAgentsFromFile(filepath.Join("..", "conf", "agents.json"))
+	require.NoError(t, err)
+
+	for _, agent := range agents {
+		for _, dependency := range agent.AgentDependencies {
+			require.NotNil(
+				t,
+				dependency.RequiredType,
+				"agent %q dependency %q must declare required_type",
+				agent.QualifiedClassName,
+				dependency.DependencyKey,
+			)
+			require.NotEmpty(t, *dependency.RequiredType)
+		}
+	}
+}
 
 func TestAgentRegistry(t *testing.T) {
 	// Setup generic server without full redis/db initialization just for routing tests

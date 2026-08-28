@@ -3,6 +3,7 @@ package guild
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,15 +22,13 @@ import (
 func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPusher, infraPublisher *infraevents.Publisher, spec *protocol.GuildSpec, orgID string, dependencyConfigPath string) (*store.GuildModel, error) {
 	applyDefaults(spec)
 
-	// Merge dependency configs: forge-home deps take priority over conf deps;
-	// spec-level deps (already in spec.DependencyMap) take priority over both.
+	// Dependency files are installation catalogs. Only materialize profiles
+	// required by this guild; explicit spec-level dependencies remain authoritative.
 	forgeHomeDeps := forgepath.Resolve(forgepath.DependencyConfigFile)
-	if err := mergeDependencies(spec, forgeHomeDeps); err != nil {
-		return nil, fmt.Errorf("failed to merge forge-home dependencies: %w", err)
+	if err := mergeRequiredDependencies(spec, db, forgeHomeDeps, dependencyConfigPath); err != nil {
+		return nil, fmt.Errorf("failed to materialize dependencies: %w", err)
 	}
-	if err := mergeDependencies(spec, dependencyConfigPath); err != nil {
-		return nil, fmt.Errorf("failed to merge dependencies: %w", err)
-	}
+	stripDependencyCatalogMetadata(spec)
 	if err := ApplyFilesystemGlobalRoot(spec, strings.TrimSpace(os.Getenv(forgeFilesystemGlobalRootEnv))); err != nil {
 		return nil, fmt.Errorf("failed to normalize filesystem dependency: %w", err)
 	}
@@ -298,6 +297,82 @@ func mergeDependencies(spec *protocol.GuildSpec, configPath string) error {
 	return nil
 }
 
+func mergeRequiredDependencies(spec *protocol.GuildSpec, db store.Store, configPaths ...string) error {
+	candidates := map[string]protocol.DependencySpec{}
+	// Later paths have lower priority.
+	for index := len(configPaths) - 1; index >= 0; index-- {
+		data, err := os.ReadFile(configPaths[index])
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		parsed := map[string]protocol.DependencySpec{}
+		if err := yaml.Unmarshal(data, &parsed); err != nil {
+			return err
+		}
+		for key, dependency := range parsed {
+			candidates[key] = dependency
+		}
+	}
+
+	// Conventional default keys remain the compatibility fallback for specs
+	// created before agent dependency metadata was authoritative.
+	required := map[string]bool{"filesystem": true, "llm": true}
+	for _, agent := range spec.Agents {
+		for _, key := range agent.AdditionalDependencies {
+			required[strings.SplitN(key, ":", 2)[0]] = true
+		}
+		entry, err := db.GetAgentByClassName(agent.ClassName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf(
+					"agent %q uses unregistered class %q; cannot determine required dependencies",
+					agent.ID,
+					agent.ClassName,
+				)
+			}
+			return fmt.Errorf(
+				"look up dependency metadata for agent %q class %q: %w",
+				agent.ID,
+				agent.ClassName,
+				err,
+			)
+		}
+		for key := range entry.AgentDependencies {
+			if _, explicitlyBound := agent.DependencyMap[key]; !explicitlyBound {
+				required[key] = true
+			}
+		}
+	}
+	if spec.DependencyMap == nil {
+		spec.DependencyMap = map[string]protocol.DependencySpec{}
+	}
+	for key := range required {
+		if _, exists := spec.DependencyMap[key]; exists {
+			continue
+		}
+		if dependency, exists := candidates[key]; exists {
+			spec.DependencyMap[key] = dependency
+		}
+	}
+	return nil
+}
+
+func stripDependencyCatalogMetadata(spec *protocol.GuildSpec) {
+	for key, dependency := range spec.DependencyMap {
+		dependency.ProvidedType = ""
+		spec.DependencyMap[key] = dependency
+	}
+	for agentIndex := range spec.Agents {
+		for key, dependency := range spec.Agents[agentIndex].DependencyMap {
+			dependency.ProvidedType = ""
+			spec.Agents[agentIndex].DependencyMap[key] = dependency
+		}
+	}
+}
+
 func buildModels(spec *protocol.GuildSpec, orgID string) (*store.GuildModel, []store.AgentModel) {
 	execEngine := "rustic_ai.core.guild.execution.sync.sync_exec_engine.SyncExecutionEngine"
 	if custom, ok := spec.Properties["execution_engine"].(string); ok {
@@ -318,6 +393,7 @@ func buildModels(spec *protocol.GuildSpec, orgID string) (*store.GuildModel, []s
 		Description:     spec.Description,
 		ExecutionEngine: execEngine,
 		OrganizationID:  orgID,
+		Properties:      store.JSONB(spec.Properties),
 		BackendConfig:   store.JSONB{},
 		DependencyMap:   dependencySpecsToJSONB(spec.DependencyMap),
 		Status:          store.GuildStatusRequested,

@@ -278,8 +278,12 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 // when none exist or the stored client_secret has expired. The client is shared
 // across all orgs, so it is keyed by providerID only.
 func (m *Manager) registerIfNeeded(ctx context.Context, providerID string, cfg ProviderConfig, res *resolvedProvider, redirectURL string) (string, string, error) {
-	if creds, ok := m.credStore.LoadCredentials(providerID); ok && !creds.expired() {
-		return creds.ClientID, creds.ClientSecret, nil
+	loadedCreds, ok, err := m.credStore.LoadCredentials(providerID)
+	if err != nil {
+		return "", "", fmt.Errorf("loading OAuth client credentials: %w", err)
+	}
+	if ok && !loadedCreds.expired() {
+		return loadedCreds.ClientID, loadedCreds.ClientSecret, nil
 	}
 	if res.registrationEndpoint == "" {
 		return "", "", fmt.Errorf("provider %q does not advertise a registration endpoint", providerID)
@@ -376,7 +380,10 @@ func (m *Manager) GetAccessToken(ctx context.Context, orgID, providerID string) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	entry, ok := m.store.Load(orgID, providerID)
+	entry, ok, err := m.store.Load(orgID, providerID)
+	if err != nil {
+		return "", fmt.Errorf("loading OAuth token: %w", err)
+	}
 	if !ok {
 		return "", fmt.Errorf("provider %q not connected for org %q: %w", providerID, orgID, ErrNotConnected)
 	}
@@ -442,14 +449,17 @@ func (m *Manager) Disconnect(orgID, providerID string) bool {
 // org. callbackBaseURL is used to compute the per-provider redirect URL shown
 // when registering the app with the third-party provider.
 // Only providers that have been activated via CheckAndUpdateProvider are returned.
-func (m *Manager) ListProviders(orgID, callbackBaseURL string) []ProviderStatus {
+func (m *Manager) ListProviders(orgID, callbackBaseURL string) ([]ProviderStatus, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	out := make([]ProviderStatus, 0, len(m.activeProviders))
 	for id := range m.activeProviders {
 		cfg := m.providers[id]
-		entry, connected := m.store.Load(orgID, id)
+		entry, connected, err := m.store.Load(orgID, id)
+		if err != nil {
+			return nil, fmt.Errorf("loading OAuth token for provider %q: %w", id, err)
+		}
 		ps := ProviderStatus{
 			ID:                        id,
 			DisplayName:               cfg.DisplayName,
@@ -465,13 +475,13 @@ func (m *Manager) ListProviders(orgID, callbackBaseURL string) []ProviderStatus 
 		}
 		out = append(out, ps)
 	}
-	return out
+	return out, nil
 }
 
 // IsConnected reports whether the org has a stored token for the provider.
-func (m *Manager) IsConnected(orgID, providerID string) bool {
-	_, ok := m.store.Load(orgID, providerID)
-	return ok
+func (m *Manager) IsConnected(orgID, providerID string) (bool, error) {
+	_, ok, err := m.store.Load(orgID, providerID)
+	return ok, err
 }
 
 // ProviderExists reports whether providerID is active (i.e. registered via CheckAndUpdateProvider).

@@ -13,35 +13,37 @@ import (
 )
 
 var (
-	serverDB                  string
-	serverRedis               string
-	serverNATS                string
-	serverEmbeddedRedis       string
-	serverListen              string
-	serverManagerAPIBase      string
-	serverDataDir             string
-	serverDependencyConfig    string
-	serverWithClient          bool
-	serverClientNodeID        string
-	serverClientMetrics       string
-	serverClientCPUs          int
-	serverClientMemory        int
-	serverClientGPUs          int
-	serverClientSupervisor    string
-	serverClientTransport     string
-	serverClientAttachTree    bool
-	serverClientZMQBridgeMode string
-	serverBackend             string
-	serverEmbeddedNATSAddr    string
-	serverUVPython            string
-	serverStateStore          string
-	serverTelemetryEnabled    bool
-	serverTelemetryMode       string
-	serverTelemetryEndpoint   string
-	serverTelemetryService    string
-	serverTelemetrySQLiteBin  string
-	serverTelemetrySQLiteDB   string
-	serverTelemetrySQLitePort int
+	serverDB                      string
+	serverRedis                   string
+	serverNATS                    string
+	serverEmbeddedRedis           string
+	serverListen                  string
+	serverManagerAPIBase          string
+	serverDataDir                 string
+	serverDependencyConfig        string
+	serverSecretProviders         string
+	serverWithClient              bool
+	serverClientNodeID            string
+	serverClientMetrics           string
+	serverClientCPUs              int
+	serverClientMemory            int
+	serverClientGPUs              int
+	serverClientSupervisor        string
+	serverClientTransport         string
+	serverClientAttachTree        bool
+	serverClientZMQBridgeMode     string
+	serverBackend                 string
+	serverEmbeddedNATSAddr        string
+	serverUVPython                string
+	serverClientDependencyPrewarm string
+	serverStateStore              string
+	serverTelemetryEnabled        bool
+	serverTelemetryMode           string
+	serverTelemetryEndpoint       string
+	serverTelemetryService        string
+	serverTelemetrySQLiteBin      string
+	serverTelemetrySQLiteDB       string
+	serverTelemetrySQLitePort     int
 )
 
 func init() {
@@ -53,6 +55,7 @@ func init() {
 	ServerCmd.Flags().StringVar(&serverManagerAPIBase, "manager-api-base-url", "", "Externally reachable Forge manager API base URL (e.g. http://forge.example.com:9090)")
 	ServerCmd.Flags().StringVar(&serverDataDir, "data-dir", "", "Base path for central file storage (default: <forge-home>/data)")
 	ServerCmd.Flags().StringVar(&serverDependencyConfig, "dependency-config", forgepath.DefaultDependencyConfigPath, "Path to dependency map config")
+	ServerCmd.Flags().StringVar(&serverSecretProviders, "secret-providers", "keychain", "Ordered runtime secret provider chain (keychain,env,dotenv,file); non-keychain providers are unsafe")
 	ServerCmd.Flags().BoolVar(&serverWithClient, "with-client", false, "Start an in-process Forge client/node")
 	ServerCmd.Flags().StringVar(&serverClientNodeID, "client-node-id", "", "Node ID for in-process client (default: hostname)")
 	ServerCmd.Flags().StringVar(&serverClientMetrics, "client-metrics-addr", ":9091", "Metrics bind address for in-process client")
@@ -66,6 +69,7 @@ func init() {
 	ServerCmd.Flags().StringVar(&serverBackend, "backend", "redis", `Messaging backend: "redis" or "nats"`)
 	ServerCmd.Flags().StringVar(&serverEmbeddedNATSAddr, "embedded-nats-addr", "", "Bind address for embedded NATS (default: ephemeral port)")
 	ServerCmd.Flags().StringVar(&serverUVPython, "uv-python", "", `Python interpreter to pin uv/uvx to when spawning Python agents (e.g. "3.13" or ">=3.13,<3.14"); empty lets uv choose`)
+	ServerCmd.Flags().StringVar(&serverClientDependencyPrewarm, "client-dependency-prewarm", "off", `Dependency preparation mode for the in-process client ("off" or "guild")`)
 	ServerCmd.Flags().StringVar(&serverStateStore, "state-store", "", `State store backend: "diskcache" (default: in-memory)`)
 	ServerCmd.Flags().BoolVar(&serverTelemetryEnabled, "otel-enabled", false, "Enable OpenTelemetry export from Forge server")
 	ServerCmd.Flags().StringVar(&serverTelemetryMode, "otel-mode", "desktop_sqlite", `Telemetry backend mode: "desktop_sqlite" or "external_otlp"`)
@@ -82,6 +86,9 @@ var ServerCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the Forge distributed server",
 	Long:  `Starts the server core with an HTTP API, metastore, and central queue management.`,
+	PreRunE: func(cmd *cobra.Command, _ []string) error {
+		return validateSecretProviderFlag(cmd, serverSecretProviders)
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		out := os.Stdout
 		l := logging.NewLogger(out, logLevel)
@@ -103,34 +110,36 @@ var ServerCmd = &cobra.Command{
 		}
 
 		cfg := &agent.ServerConfig{
-			DatabaseURL:             db,
-			RedisURL:                serverRedis,
-			NATSUrl:                 serverNATS,
-			Backend:                 serverBackend,
-			EmbeddedRedisAddr:       serverEmbeddedRedis,
-			EmbeddedNATSAddr:        serverEmbeddedNATSAddr,
-			ListenAddress:           serverListen,
-			ManagerAPIBaseURL:       serverManagerAPIBase,
-			DataDir:                 dataDir,
-			DependencyConfig:        serverDependencyConfig,
-			WithClient:              serverWithClient,
-			ClientNodeID:            serverClientNodeID,
-			ClientMetricsAddr:       serverClientMetrics,
-			ClientCPUs:              serverClientCPUs,
-			ClientMemory:            serverClientMemory,
-			ClientGPUs:              serverClientGPUs,
-			ClientDefaultSupervisor: serverClientSupervisor,
-			ClientDefaultTransport:  serverClientTransport,
-			ClientZMQBridgeMode:     serverClientZMQBridgeMode,
-			ClientAttachProcessTree: serverClientAttachTree,
-			StateStore:              serverStateStore,
-			TelemetryEnabled:        serverTelemetryEnabled,
-			TelemetryMode:           serverTelemetryMode,
-			TelemetryEndpoint:       serverTelemetryEndpoint,
-			TelemetryServiceName:    serverTelemetryService,
-			TelemetrySQLiteBinary:   serverTelemetrySQLiteBin,
-			TelemetrySQLiteDBPath:   serverTelemetrySQLiteDB,
-			TelemetrySQLitePort:     serverTelemetrySQLitePort,
+			DatabaseURL:                 db,
+			RedisURL:                    serverRedis,
+			NATSUrl:                     serverNATS,
+			Backend:                     serverBackend,
+			EmbeddedRedisAddr:           serverEmbeddedRedis,
+			EmbeddedNATSAddr:            serverEmbeddedNATSAddr,
+			ListenAddress:               serverListen,
+			ManagerAPIBaseURL:           serverManagerAPIBase,
+			DataDir:                     dataDir,
+			DependencyConfig:            serverDependencyConfig,
+			SecretProviders:             serverSecretProviders,
+			WithClient:                  serverWithClient,
+			ClientNodeID:                serverClientNodeID,
+			ClientMetricsAddr:           serverClientMetrics,
+			ClientCPUs:                  serverClientCPUs,
+			ClientMemory:                serverClientMemory,
+			ClientGPUs:                  serverClientGPUs,
+			ClientDefaultSupervisor:     serverClientSupervisor,
+			ClientDefaultTransport:      serverClientTransport,
+			ClientZMQBridgeMode:         serverClientZMQBridgeMode,
+			ClientDependencyPrewarmMode: serverClientDependencyPrewarm,
+			ClientAttachProcessTree:     serverClientAttachTree,
+			StateStore:                  serverStateStore,
+			TelemetryEnabled:            serverTelemetryEnabled,
+			TelemetryMode:               serverTelemetryMode,
+			TelemetryEndpoint:           serverTelemetryEndpoint,
+			TelemetryServiceName:        serverTelemetryService,
+			TelemetrySQLiteBinary:       serverTelemetrySQLiteBin,
+			TelemetrySQLiteDBPath:       serverTelemetrySQLiteDB,
+			TelemetrySQLitePort:         serverTelemetrySQLitePort,
 		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

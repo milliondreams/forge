@@ -18,8 +18,8 @@ func clientStoreKey(providerID string) string {
 // using Dynamic Client Registration (RFC 7591) these are issued by the provider
 // and persisted so they can be reused across reconnects and token refreshes.
 type clientCredentials struct {
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
 	// SecretExpiresAt is when the client_secret expires. Zero means it never
 	// expires (RFC 7591 client_secret_expires_at of 0).
 	SecretExpiresAt time.Time `json:"secret_expires_at"`
@@ -37,18 +37,18 @@ func (c *clientCredentials) expired() bool {
 // the token backend.
 type ClientCredentialsStore interface {
 	SaveCredentials(providerID string, c *clientCredentials) error
-	LoadCredentials(providerID string) (*clientCredentials, bool)
+	LoadCredentials(providerID string) (*clientCredentials, bool, error)
 	DeleteCredentials(providerID string) bool
 }
 
-// NewClientCredentialsStore creates a ClientCredentialsStore by name, matching
-// the backends supported by NewTokenStore ("memory" or "keychain").
+// NewClientCredentialsStore creates a keychain-backed store by default. The
+// memory implementation remains available explicitly for unit tests.
 func NewClientCredentialsStore(kind string) (ClientCredentialsStore, error) {
 	switch kind {
-	case "", "memory":
-		return NewInMemoryClientCredentialsStore(), nil
-	case "keychain":
+	case "", "keychain":
 		return NewKeychainClientCredentialsStore(), nil
+	case "memory":
+		return NewInMemoryClientCredentialsStore(), nil
 	default:
 		return nil, fmt.Errorf("unknown oauth client credentials store %q; supported: memory, keychain", kind)
 	}
@@ -72,11 +72,11 @@ func (s *InMemoryClientCredentialsStore) SaveCredentials(providerID string, c *c
 	return nil
 }
 
-func (s *InMemoryClientCredentialsStore) LoadCredentials(providerID string) (*clientCredentials, bool) {
+func (s *InMemoryClientCredentialsStore) LoadCredentials(providerID string) (*clientCredentials, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.creds[clientStoreKey(providerID)]
-	return c, ok
+	return c, ok, nil
 }
 
 func (s *InMemoryClientCredentialsStore) DeleteCredentials(providerID string) bool {

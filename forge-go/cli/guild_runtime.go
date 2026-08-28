@@ -102,7 +102,7 @@ func NewGuildRuntime(config RuntimeConfig) (*GuildRuntime, error) {
 	dbPath := filepath.Join(tempDir, "forge-cli.db")
 	dataDir := filepath.Join(tempDir, "forge-data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("failed to create data dir: %w", err)
 	}
 
@@ -611,7 +611,7 @@ func (r *GuildRuntime) Shutdown() error {
 	}
 
 	if r.redisClient != nil {
-		r.redisClient.Close()
+		_ = r.redisClient.Close()
 	}
 
 	if r.natsConn != nil {
@@ -623,7 +623,7 @@ func (r *GuildRuntime) Shutdown() error {
 	}
 
 	if r.tempDir != "" {
-		os.RemoveAll(r.tempDir)
+		_ = os.RemoveAll(r.tempDir)
 	}
 
 	return nil
@@ -636,11 +636,11 @@ func (r *GuildRuntime) waitForReady(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(r.serverBase + "/readyz")
 		if err == nil && resp.StatusCode == http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -678,7 +678,9 @@ func (r *GuildRuntime) guildStatus(guildID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
@@ -769,7 +771,9 @@ func (r *GuildRuntime) postJSON(url string, payload, result any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -805,6 +809,8 @@ func reserveLocalAddr() (string, error) {
 		return "", err
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	if err := listener.Close(); err != nil {
+		return "", err
+	}
 	return addr, nil
 }

@@ -37,7 +37,8 @@ func validateSecretName(name string) error {
 		return fmt.Errorf("secret name must be at most 255 characters")
 	}
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+		isAlphaNumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !isAlphaNumeric && r != '_' {
 			return fmt.Errorf("secret name must contain only alphanumeric characters and underscores")
 		}
 	}

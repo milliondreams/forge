@@ -34,6 +34,10 @@ func setupTestServer(t *testing.T) (*Server, *miniredis.Miniredis, store.Store, 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	dbStore, err := store.NewGormStore(store.DriverSQLite, dbPath)
 	require.NoError(t, err)
+	require.NoError(t, dbStore.RegisterAgent(&store.CatalogAgentEntry{
+		QualifiedClassName: "test.Agent",
+		AgentName:          "Test Agent",
+	}))
 
 	// Setup file store
 	fsPath := filepath.Join(t.TempDir(), "files")

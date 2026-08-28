@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/raft"
+	"github.com/stretchr/testify/require"
 )
 
 func setupTestNodes(t *testing.T, count int, startPort int) []*RaftElector {
@@ -83,55 +86,58 @@ func TestRaftElector_QuorumFormation(t *testing.T) {
 func TestRaftElector_Failover(t *testing.T) {
 	// Spin up 3 nodes starting at port 8700
 	electors := setupTestNodes(t, 3, 8700)
+	leaderIdx := -1
+	leaderClosed := false
+	t.Cleanup(func() {
+		for i, e := range electors {
+			if leaderClosed && i == leaderIdx {
+				continue
+			}
+			e.Close()
+		}
+	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	var leaderIdx = -1
-
-	// Wait for initial leader
-waitForLeader:
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout waiting for initial leader")
-		case <-time.After(1 * time.Second):
-			for i, e := range electors {
-				if e.IsLeader() {
-					leaderIdx = i
-					break waitForLeader
+	// Do not kill the initial seed leader until all three nodes are committed
+	// as voters. Leadership can appear before gossip reconciliation finishes;
+	// killing the sole voter in that window leaves no quorum for failover.
+	require.Eventually(t, func() bool {
+		leaderIdx = -1
+		for i, e := range electors {
+			if e.IsLeader() {
+				if leaderIdx != -1 {
+					return false
 				}
+				leaderIdx = i
 			}
 		}
-	}
+		if leaderIdx == -1 {
+			return false
+		}
 
-	if leaderIdx == -1 {
-		t.Fatalf("failed to find leader")
-	}
+		future := electors[leaderIdx].raftNode.GetConfiguration()
+		if future.Error() != nil {
+			return false
+		}
+		voterCount := 0
+		for _, server := range future.Configuration().Servers {
+			if server.Suffrage == raft.Voter {
+				voterCount++
+			}
+		}
+		return voterCount == len(electors)
+	}, 20*time.Second, 100*time.Millisecond, "cluster did not commit all voters")
 
 	// Kill the leader
 	electors[leaderIdx].Close()
+	leaderClosed = true
 
 	// Wait for a follower to take over
-waitForFailover:
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout waiting for failover")
-		case <-time.After(1 * time.Second):
-			for i, e := range electors {
-				if i != leaderIdx && e.IsLeader() {
-					// We have a new leader!
-					break waitForFailover
-				}
+	require.Eventually(t, func() bool {
+		for i, e := range electors {
+			if i != leaderIdx && e.IsLeader() {
+				return true
 			}
 		}
-	}
-
-	// Clean up remaining
-	for i, e := range electors {
-		if i != leaderIdx {
-			e.Close()
-		}
-	}
+		return false
+	}, 20*time.Second, 100*time.Millisecond, "timeout waiting for failover")
 }

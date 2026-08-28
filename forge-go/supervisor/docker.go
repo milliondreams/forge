@@ -220,10 +220,14 @@ func (d *DockerSupervisor) Launch(ctx context.Context, guildID string, agentSpec
 	env = append(env, "UV_PROJECT_ENVIRONMENT=/tmp/.venv")
 
 	// Extract UV_CACHE_DIR so we can bind-mount it into the container for caching.
+	// Host cache paths (especially macOS /var paths) are not necessarily valid
+	// container paths, so expose the cache at a stable location in the container.
 	var uvCacheDir string
-	for _, e := range env {
+	const containerUVCacheDir = "/tmp/forge-uv-cache"
+	for i, e := range env {
 		if val, ok := strings.CutPrefix(e, "UV_CACHE_DIR="); ok {
 			uvCacheDir = val
+			env[i] = "UV_CACHE_DIR=" + containerUVCacheDir
 			break
 		}
 	}
@@ -271,7 +275,11 @@ func (d *DockerSupervisor) Launch(ctx context.Context, guildID string, agentSpec
 	// Mount the UV cache directory so repeated runs reuse cached packages.
 	if uvCacheDir != "" {
 		if err := os.MkdirAll(uvCacheDir, 0o755); err == nil {
-			hostCfg.Binds = append(hostCfg.Binds, fmt.Sprintf("%s:%s:rw,z", uvCacheDir, uvCacheDir))
+			hostCacheDir := uvCacheDir
+			if resolved, resolveErr := filepath.EvalSymlinks(uvCacheDir); resolveErr == nil {
+				hostCacheDir = resolved
+			}
+			hostCfg.Binds = append(hostCfg.Binds, fmt.Sprintf("%s:%s:rw,z", hostCacheDir, containerUVCacheDir))
 		}
 	}
 

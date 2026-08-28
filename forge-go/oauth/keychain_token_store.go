@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,8 +66,6 @@ func fromStoredEntry(s *storedEntry) *tokenEntry {
 
 // KeychainTokenStore persists OAuth tokens in the OS keychain (macOS Keychain,
 // Windows Credential Manager, Linux Secret Service via libsecret).
-//
-// Set FORGE_OAUTH_TOKEN_STORE=keychain to activate this backend.
 type KeychainTokenStore struct {
 	service string
 }
@@ -90,16 +89,19 @@ func (s *KeychainTokenStore) Save(orgID, providerID string, entry *tokenEntry) e
 	return nil
 }
 
-func (s *KeychainTokenStore) Load(orgID, providerID string) (*tokenEntry, bool) {
+func (s *KeychainTokenStore) Load(orgID, providerID string) (*tokenEntry, bool, error) {
 	data, err := keyring.Get(s.service, StoreKey(orgID, providerID))
 	if err != nil {
-		return nil, false
+		if errors.Is(err, keyring.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("loading token from keychain: %w", err)
 	}
 	var se storedEntry
 	if err := json.Unmarshal([]byte(data), &se); err != nil {
-		return nil, false
+		return nil, false, fmt.Errorf("parsing token from keychain: %w", err)
 	}
-	return fromStoredEntry(&se), true
+	return fromStoredEntry(&se), true, nil
 }
 
 func (s *KeychainTokenStore) Delete(orgID, providerID string) bool {

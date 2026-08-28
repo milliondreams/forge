@@ -129,18 +129,20 @@ func TestSecretProvider_NonOAuthJSONReturnedRaw(t *testing.T) {
 	}
 }
 
-func TestSecretProvider_InDefaultProviderChain(t *testing.T) {
+func TestSecretProvider_InExplicitProviderChain(t *testing.T) {
 	keyring.MockInit()
-	t.Setenv("FORGE_SECRET_PROVIDERS", "keychain")
 
 	if err := keyring.Set(forgepath.KeychainService(), "CHAIN_KEY", "chain_value"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	provider := secrets.DefaultProvider()
+	provider, _, _, err := secrets.NewProviderChain("keychain")
+	if err != nil {
+		t.Fatalf("construct provider chain: %v", err)
+	}
 	val, err := provider.Resolve(context.Background(), "CHAIN_KEY")
 	if err != nil {
-		t.Fatalf("expected DefaultProvider to resolve from keychain, got: %v", err)
+		t.Fatalf("expected explicit provider chain to resolve from keychain, got: %v", err)
 	}
 	if val != "chain_value" {
 		t.Errorf("expected chain_value, got %s", val)

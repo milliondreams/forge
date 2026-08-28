@@ -30,14 +30,24 @@ type AgentDependencyEntry struct {
 	OrgLevel      *bool   `json:"org_level,omitempty"`
 	AgentLevel    *bool   `json:"agent_level,omitempty"`
 	VariableName  *string `json:"variable_name,omitempty"`
+	RequiredType  *string `json:"required_type,omitempty"`
 	ResolvedType  *string `json:"resolved_type,omitempty"`
 }
 
 type ConfiguredDependencyEntry struct {
 	Key          string                 `json:"key"`
-	ClassName    string                 `json:"class_name"`
-	ProvidedType string                 `json:"provided_type,omitempty"`
-	Properties   map[string]interface{} `json:"properties,omitempty"`
+	DisplayName  string                 `json:"display_name"`
+	Description  string                 `json:"description,omitempty"`
+	ProvidedType string                 `json:"provided_type"`
+	Provider     string                 `json:"provider,omitempty"`
+	Capabilities []string               `json:"capabilities"`
+	Aliases      []string               `json:"aliases"`
+	Availability DependencyAvailability `json:"availability"`
+}
+
+type DependencyAvailability struct {
+	Status  string   `json:"status"`
+	Reasons []string `json:"reasons"`
 }
 
 type BlueprintAgentDependencyEntry struct {
@@ -48,6 +58,7 @@ type BlueprintAgentDependencyEntry struct {
 	OrgLevel      *bool                       `json:"org_level,omitempty"`
 	AgentLevel    *bool                       `json:"agent_level,omitempty"`
 	VariableName  *string                     `json:"variable_name,omitempty"`
+	RequiredType  *string                     `json:"required_type,omitempty"`
 	ResolvedType  *string                     `json:"resolved_type,omitempty"`
 	Providers     []ConfiguredDependencyEntry `json:"providers"`
 }

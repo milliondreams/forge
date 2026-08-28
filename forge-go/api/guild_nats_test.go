@@ -47,6 +47,10 @@ func setupNATSTestServer(t *testing.T) (*Server, control.ControlPlane, superviso
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	dbStore, err := store.NewGormStore(store.DriverSQLite, dbPath)
 	require.NoError(t, err)
+	require.NoError(t, dbStore.RegisterAgent(&store.CatalogAgentEntry{
+		QualifiedClassName: "test.Agent",
+		AgentName:          "Test Agent",
+	}))
 
 	fsPath := filepath.Join(t.TempDir(), "files")
 	resolver := filesystem.NewFileSystemResolver(fsPath)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,7 +19,9 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 
+	"github.com/rustic-ai/forge/forge-go/api"
 	"github.com/rustic-ai/forge/forge-go/control"
+	"github.com/rustic-ai/forge/forge-go/dependencies"
 	"github.com/rustic-ai/forge/forge-go/helper/logging"
 	"github.com/rustic-ai/forge/forge-go/infraevents"
 	"github.com/rustic-ai/forge/forge-go/messaging"
@@ -62,8 +65,29 @@ func deregisterNode(ctx context.Context, serverURL, nodeID string) error {
 	return nil
 }
 
+type NodeHeartbeatPayload struct {
+	ReadyDependencyProfiles []string `json:"ready_dependency_profiles"`
+}
+
 func StartClient(ctx context.Context, config *ClientConfig) error {
 	log := logging.FromContext(ctx, slog.Default()).With("node_id", config.NodeID)
+	if err := dependencies.ValidateMode(config.DependencyPrewarmMode); err != nil {
+		return err
+	}
+	sec := config.SecretProvider
+	if sec == nil {
+		var names []string
+		var unsafe bool
+		var err error
+		sec, names, unsafe, err = secrets.NewProviderChain(config.SecretProviders)
+		if err != nil {
+			return fmt.Errorf("configure secret providers: %w", err)
+		}
+		if unsafe {
+			log.Warn("UNSAFE SECRET PROVIDERS ENABLED; runtime credentials may be read outside the OS keychain", "providers", strings.Join(names, ","))
+		}
+		defer sec.Clear()
+	}
 
 	if config.CPUs <= 0 {
 		config.CPUs = runtime.NumCPU()
@@ -73,6 +97,26 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	}
 	if config.GPUs < 0 {
 		config.GPUs = 0
+	}
+	readyProfiles := append([]string{}, config.ReadyDependencyProfiles...)
+	if config.ReadinessProvider != nil {
+		var err error
+		readyProfiles, err = config.ReadinessProvider()
+		if err != nil {
+			return fmt.Errorf("evaluate dependency readiness: %w", err)
+		}
+	} else if !config.ReadinessProvided {
+		var err error
+		readyProfiles, err = api.ReadyDependencyProfileKeys(config.DependencyConfig, func(name string) (bool, error) {
+			_, err := sec.Resolve(ctx, name)
+			if errors.Is(err, secrets.ErrSecretNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		})
+		if err != nil {
+			return fmt.Errorf("evaluate dependency readiness: %w", err)
+		}
 	}
 
 	log.Info("Starting Forge client daemon",
@@ -123,10 +167,12 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	}
 
 	reqPayload := struct {
-		NodeID   string                     `json:"node_id"`
-		Capacity scheduler.ResourceCapacity `json:"capacity"`
+		NodeID                  string                     `json:"node_id"`
+		Capacity                scheduler.ResourceCapacity `json:"capacity"`
+		ReadyDependencyProfiles []string                   `json:"ready_dependency_profiles"`
 	}{
-		NodeID: config.NodeID,
+		NodeID:                  config.NodeID,
+		ReadyDependencyProfiles: readyProfiles,
 		Capacity: scheduler.ResourceCapacity{
 			CPUs:   config.CPUs,
 			Memory: config.Memory,
@@ -163,10 +209,18 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 			_ = reg.InjectNetwork(className, nets)
 		}
 	}
-	sec := secrets.DefaultProvider()
 	infraPublisher, err := infraevents.NewPublisher(msgBackend)
 	if err != nil {
 		return fmt.Errorf("failed to create infra event publisher: %w", err)
+	}
+	var dependencyPrewarmer *dependencies.Coordinator
+	if dependencies.Enabled(config.DependencyPrewarmMode) {
+		dependencyPrewarmer, err = dependencies.NewCoordinator(dependencies.Config{
+			Context: ctx, Registry: reg, Publisher: infraPublisher, NodeID: config.NodeID,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize dependency prewarmer: %w", err)
+		}
 	}
 	supervisorFactory := buildOrgSupervisorFactory(statusStore, config.DefaultSupervisor, config.DefaultTransport, msgBackend, infraPublisher, config.DataDir, config.AttachProcessTree, config.ZMQBridgeMode)
 	nodeQueueKey := "forge:control:node:" + config.NodeID
@@ -175,9 +229,13 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 		control.WithNodeID(config.NodeID),
 		control.WithInfraEventPublisher(infraPublisher),
 		control.WithStopAgentsOnExit(config.StopAgentsOnExit),
+		control.WithDependencyPrewarmer(dependencyPrewarmer),
 	)
 	if err := queueHandler.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start node queue listener: %w", err)
+	}
+	if dependencyPrewarmer != nil {
+		dependencyPrewarmer.WarmSystem()
 	}
 
 	go func() {
@@ -190,8 +248,19 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if config.ReadinessProvider != nil {
+					updated, err := config.ReadinessProvider()
+					if err != nil {
+						log.Error("Failed to update dependency readiness; reporting no ready profiles", "error", err)
+						readyProfiles = nil
+					} else {
+						readyProfiles = updated
+					}
+				}
 				hbURL := fmt.Sprintf("%s/nodes/%s/heartbeat", config.ServerURL, config.NodeID)
-				req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hbURL, nil)
+				hbBody, _ := json.Marshal(NodeHeartbeatPayload{ReadyDependencyProfiles: readyProfiles})
+				req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hbURL, bytes.NewReader(hbBody))
+				req.Header.Set("Content-Type", "application/json")
 				if r, err := client.Do(req); err == nil {
 					status := r.StatusCode
 					_ = r.Body.Close()
@@ -200,7 +269,9 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 						continue
 					}
 					if status == http.StatusNotFound {
-						if err := registerNode(ctx, config.ServerURL, body); err != nil {
+						reqPayload.ReadyDependencyProfiles = readyProfiles
+						registrationBody, _ := json.Marshal(reqPayload)
+						if err := registerNode(ctx, config.ServerURL, registrationBody); err != nil {
 							log.Warn("Node not found during heartbeat and re-registration failed", "error", err, "node_id", config.NodeID)
 						} else {
 							log.Info("Node re-registered after heartbeat miss", "node_id", config.NodeID)

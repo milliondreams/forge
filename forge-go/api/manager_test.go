@@ -110,10 +110,66 @@ func TestManagerAgentRouteAndHeartbeatLifecycle(t *testing.T) {
 	_ = ensureResp.Body.Close()
 	require.Equal(t, http.StatusOK, ensureResp.StatusCode)
 
-	agentSpec := protocol.AgentSpec{ID: "g-manager-2#a-1", Name: "A1", Description: "d", ClassName: "test.Agent"}
+	resourcesCPU := 1.5
+	qosTimeout := 30
+	agentSpec := protocol.AgentSpec{
+		ID:          "g-manager-2#a-1",
+		Name:        "A1",
+		Description: "d",
+		ClassName:   "test.Agent",
+		DependencyMap: map[string]protocol.DependencySpec{
+			"llm": {
+				ClassName:    "test.LLMResolver",
+				ProvidedType: "test.LLM",
+				Properties:   map[string]interface{}{"model": "test-model"},
+			},
+		},
+		Resources: protocol.ResourceSpec{
+			NumCPUs:         &resourcesCPU,
+			Secrets:         []string{"MODEL_TOKEN"},
+			CustomResources: map[string]interface{}{"memory": 512},
+		},
+		QOS: protocol.QOSSpec{Timeout: &qosTimeout},
+	}
 	agResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", agentSpec, nil)
 	defer func() { _ = agResp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, agResp.StatusCode)
+
+	idempotentResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", agentSpec, nil)
+	defer func() { _ = idempotentResp.Body.Close() }()
+	require.Equal(t, http.StatusOK, idempotentResp.StatusCode)
+
+	// Rustic AI validates nested specs before returning them and materializes
+	// optional Pydantic defaults as explicit nulls. These are the same spec.
+	withOptionalNull := agentSpec
+	withOptionalNull.Properties = map[string]interface{}{
+		"guild_spec": map[string]interface{}{
+			"agents": []interface{}{
+				map[string]interface{}{
+					"id":         "nested-agent",
+					"properties": map[string]interface{}{"system_prompt_generator": nil},
+				},
+			},
+		},
+	}
+	withoutOptionalNull := withOptionalNull
+	withoutOptionalNull.Properties = map[string]interface{}{
+		"guild_spec": map[string]interface{}{
+			"agents": []interface{}{
+				map[string]interface{}{
+					"id":         "nested-agent",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+	}
+	require.True(t, agentSpecsEquivalent(&withOptionalNull, &withoutOptionalNull))
+
+	conflictingSpec := agentSpec
+	conflictingSpec.Name = "Different"
+	conflictResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", conflictingSpec, nil)
+	defer func() { _ = conflictResp.Body.Close() }()
+	require.Equal(t, http.StatusConflict, conflictResp.StatusCode)
 
 	updReq := UpdateAgentStatusRequest{Status: store.AgentStatusStarting}
 	updResp := jsonRequest(

@@ -9,22 +9,44 @@ import (
 // already exists for the org.
 var ErrSecretExists = errors.New("secret already exists")
 
-// Manager provides org-scoped secret CRUD on top of a SecretStore. It holds no
-// state of its own — the store is the single source of truth, so there is no
-// separate name index to maintain. Its mutex only serializes the
-// exists-then-write sequence in Set/Update against concurrent callers.
+// Manager provides org-scoped secret CRUD over a value store and a separate
+// value-free metadata index. Its mutex keeps keychain and metadata mutations
+// ordered against concurrent callers.
 //
 // The Manager deliberately exposes no method that returns a secret value:
 // values are read only by a SecretProvider during resolution, never through the
 // management API, so they cannot be leaked via an HTTP handler.
 type Manager struct {
-	mu    sync.Mutex
-	store SecretStore
+	mu          sync.Mutex
+	store       SecretStore
+	metadata    MetadataIndex
+	invalidator interface{ Invalidate(string) }
 }
 
 // NewManager constructs a Manager backed by the given SecretStore.
 func NewManager(store SecretStore) *Manager {
-	return &Manager{store: store}
+	return &Manager{store: store, metadata: storeMetadataAdapter{store: store}}
+}
+
+func NewManagerWithInvalidator(store SecretStore, invalidator interface{ Invalidate(string) }) *Manager {
+	return NewManagerWithMetadata(store, storeMetadataAdapter{store: store}, invalidator)
+}
+
+func NewManagerWithMetadata(store SecretStore, metadata MetadataIndex, invalidator interface{ Invalidate(string) }) *Manager {
+	return &Manager{store: store, metadata: metadata, invalidator: invalidator}
+}
+
+type storeMetadataAdapter struct{ store SecretStore }
+
+func (a storeMetadataAdapter) Add(string, string) error            { return nil }
+func (a storeMetadataAdapter) Remove(orgID, name string) bool      { return a.store.Delete(orgID, name) }
+func (a storeMetadataAdapter) Exists(orgID, name string) bool      { return a.store.Exists(orgID, name) }
+func (a storeMetadataAdapter) List(orgID string) ([]string, error) { return a.store.List(orgID) }
+
+func (m *Manager) invalidate(orgID, name string) {
+	if m.invalidator != nil {
+		m.invalidator.Invalidate(SecretStoreKey(orgID, name))
+	}
 }
 
 // Set creates a new secret for the org. It returns ErrSecretExists if a secret
@@ -32,10 +54,18 @@ func NewManager(store SecretStore) *Manager {
 func (m *Manager) Set(orgID, name, value string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.store.Exists(orgID, name) {
+	if m.metadata.Exists(orgID, name) {
 		return ErrSecretExists
 	}
-	return m.store.Save(orgID, name, value)
+	if err := m.store.Save(orgID, name, value); err != nil {
+		return err
+	}
+	if err := m.metadata.Add(orgID, name); err != nil {
+		_ = m.store.Delete(orgID, name)
+		return err
+	}
+	m.invalidate(orgID, name)
+	return nil
 }
 
 // Update replaces the value of an existing secret. It returns ErrSecretNotFound
@@ -43,24 +73,35 @@ func (m *Manager) Set(orgID, name, value string) error {
 func (m *Manager) Update(orgID, name, value string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.store.Exists(orgID, name) {
+	if !m.metadata.Exists(orgID, name) {
 		return ErrSecretNotFound
 	}
-	return m.store.Save(orgID, name, value)
+	if err := m.store.Save(orgID, name, value); err != nil {
+		return err
+	}
+	m.invalidate(orgID, name)
+	return nil
 }
 
 // Delete removes a secret. It returns false if no secret with that name exists
 // for the org.
 func (m *Manager) Delete(orgID, name string) bool {
-	return m.store.Delete(orgID, name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	deleted := m.store.Delete(orgID, name)
+	if deleted {
+		m.metadata.Remove(orgID, name)
+		m.invalidate(orgID, name)
+	}
+	return deleted
 }
 
 // List returns the names of the org's secrets, sorted. It never returns values.
 func (m *Manager) List(orgID string) ([]string, error) {
-	return m.store.List(orgID)
+	return m.metadata.List(orgID)
 }
 
 // Exists reports whether a secret with that name exists for the org.
 func (m *Manager) Exists(orgID, name string) bool {
-	return m.store.Exists(orgID, name)
+	return m.metadata.Exists(orgID, name)
 }

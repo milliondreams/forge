@@ -50,15 +50,15 @@ type SecretStore interface {
 }
 
 // NewSecretStore creates a SecretStore by name. Supported backends:
-//   - "memory" (default): in-process store, secrets lost on restart.
-//   - "keychain": OS keychain (macOS Keychain, Windows Credential Manager,
-//     Linux Secret Service). Set FORGE_SECRET_STORE=keychain to activate.
+//   - "keychain" (default): OS keychain (macOS Keychain, Windows Credential
+//     Manager, Linux Secret Service).
+//   - "memory": test-only in-process store, secrets lost on restart.
 func NewSecretStore(kind string) (SecretStore, error) {
 	switch kind {
-	case "", "memory":
-		return NewInMemorySecretStore(), nil
-	case "keychain":
+	case "", "keychain":
 		return NewKeychainSecretStore(), nil
+	case "memory":
+		return NewInMemorySecretStore(), nil
 	default:
 		return nil, fmt.Errorf("unknown secret store %q; supported: memory, keychain", kind)
 	}

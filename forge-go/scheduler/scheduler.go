@@ -46,8 +46,12 @@ func (s *Scheduler) Schedule(agentSpec protocol.AgentSpec) (string, error) {
 
 	var bestNode string
 	bestFitScore := -1
+	requiredProfiles := dependencyProfiles(agentSpec)
 
 	for _, n := range nodes {
+		if !nodeReadyFor(&n, requiredProfiles) {
+			continue
+		}
 		remCPUs := n.TotalCapacity.CPUs - n.UsedCapacity.CPUs
 		remMem := n.TotalCapacity.Memory - n.UsedCapacity.Memory
 		remGPUs := n.TotalCapacity.GPUs - n.UsedCapacity.GPUs
@@ -74,6 +78,22 @@ func (s *Scheduler) Schedule(agentSpec protocol.AgentSpec) (string, error) {
 	})
 
 	return bestNode, nil
+}
+
+func dependencyProfiles(agentSpec protocol.AgentSpec) []string {
+	raw := agentSpec.Properties[protocol.DependencyProfilesProperty]
+	result := make([]string, 0)
+	switch values := raw.(type) {
+	case []string:
+		result = append(result, values...)
+	case []interface{}:
+		for _, value := range values {
+			if key, ok := value.(string); ok {
+				result = append(result, key)
+			}
+		}
+	}
+	return normalizedProfileKeys(result)
 }
 
 func (r *NodeRegistry) AllocateCapacity(nodeID string, cap ResourceCapacity) {

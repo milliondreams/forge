@@ -2,8 +2,8 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 )
@@ -13,8 +13,8 @@ var (
 	extProviders   = map[string]func() SecretProvider{}
 )
 
-// RegisterProvider registers an external provider type by name so it can be
-// activated via FORGE_SECRET_PROVIDERS. Call from an init() function.
+// RegisterProvider registers an external provider type by name. Call from an
+// init function in packages that cannot be imported here without a cycle.
 func RegisterProvider(name string, fn func() SecretProvider) {
 	extProvidersMu.Lock()
 	defer extProvidersMu.Unlock()
@@ -54,34 +54,61 @@ func (p *ChainSecretProvider) Resolve(ctx context.Context, key string) (string, 
 		if err == nil {
 			return val, nil
 		}
+		if !errors.Is(err, ErrSecretNotFound) {
+			return "", err
+		}
 	}
 	return "", ErrSecretNotFound
 }
 
-// DefaultProvider builds the secret resolution chain from FORGE_SECRET_PROVIDERS
-// (comma-separated, e.g. "env,dotenv,file,keychain"). Falls back to
-// "env,dotenv,file". External types (e.g. keychain) require a side-effect import
-// of their package to register via RegisterProvider.
-func DefaultProvider() SecretProvider {
-	order := os.Getenv("FORGE_SECRET_PROVIDERS")
-	if order == "" {
-		order = "env,dotenv,file"
+// ParseProviderChain validates a comma-separated provider chain, removes
+// duplicates, and preserves first-seen precedence. An empty value means the
+// secure keychain-only default.
+func ParseProviderChain(spec string) ([]string, bool, error) {
+	if strings.TrimSpace(spec) == "" {
+		spec = "keychain"
+	}
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	unsafe := false
+	for _, raw := range strings.Split(spec, ",") {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			return nil, false, fmt.Errorf("secret provider chain contains an empty provider")
+		}
+		switch name {
+		case "keychain":
+		case "env", "dotenv", "file":
+			unsafe = true
+		default:
+			return nil, false, fmt.Errorf("unknown secret provider type %q", name)
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, false, fmt.Errorf("secret provider chain must not be empty")
+	}
+	return names, unsafe, nil
+}
+
+// NewProviderChain constructs a strict provider chain. It never consults the
+// process environment for provider selection and never falls back silently.
+func NewProviderChain(spec string) (*CachedProvider, []string, bool, error) {
+	names, unsafe, err := ParseProviderChain(spec)
+	if err != nil {
+		return nil, nil, false, err
 	}
 	var providers []SecretProvider
-	for _, name := range strings.Split(order, ",") {
-		p, err := newProvider(strings.TrimSpace(name))
+	for _, name := range names {
+		p, err := newProvider(name)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "secrets: %v (check FORGE_SECRET_PROVIDERS and side-effect imports)\n", err)
-			continue
+			return nil, nil, false, err
 		}
 		providers = append(providers, p)
 	}
-	if len(providers) == 0 {
-		return NewChainSecretProvider(
-			NewEnvSecretProvider(),
-			NewDotEnvSecretProvider(""),
-			NewFileSecretProvider(""),
-		)
-	}
-	return NewChainSecretProvider(providers...)
+	return NewCachedProvider(NewChainSecretProvider(providers...)), names, unsafe, nil
 }

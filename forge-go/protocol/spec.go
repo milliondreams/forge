@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const DependencyProfilesProperty = "_forge_dependency_profiles"
+
 // AgentTag represents a tag that can be assigned to an agent.
 type AgentTag struct {
 	ID   *string `json:"id,omitempty"`

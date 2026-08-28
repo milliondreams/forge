@@ -72,6 +72,8 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_UI_API", "true")
 	t.Setenv("FORGE_IDENTITY_MODE", "local")
 	t.Setenv("FORGE_QUOTA_MODE", "local")
+	t.Setenv(localUserIDEnvVar, "local-user-123")
+	t.Setenv(localUserNameEnvVar, "Alice")
 
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
@@ -101,7 +103,7 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 
 	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:dummyuserid", &msg))
 
-	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/dummyuserid/messages", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/local-user-123/messages", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -239,6 +241,24 @@ filesystem:
   provided_type: rustic_ai.core.filesystem.FileSystem
   properties:
     path_base: /tmp
+llm_unavailable:
+  class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.llm.LLM
+  catalog:
+    display_name: Unavailable LLM
+    selectable: true
+  requirements:
+    secrets: [TEST_MISSING_DEPENDENCY_SECRET]
+  properties:
+    model: unavailable
+llm_hidden:
+  class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
+  provided_type: rustic_ai.core.llm.LLM
+  catalog:
+    display_name: Hidden LLM
+    selectable: false
+  properties:
+    model: hidden
 `), 0o600))
 	t.Setenv("FORGE_DEPENDENCY_CONFIG", configPath)
 
@@ -250,7 +270,7 @@ filesystem:
 	router := s.buildRouter()
 
 	t.Run("list all", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/rustic/dependencies", nil)
+		req := httptest.NewRequest(http.MethodGet, "/rustic/catalog/dependencies", nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -262,8 +282,20 @@ filesystem:
 		require.Equal(t, "llm_openai", deps[1].Key)
 	})
 
+	t.Run("include unavailable", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rustic/catalog/dependencies?include_unavailable=true", nil)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var deps []ConfiguredDependencyEntry
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
+		require.Len(t, deps, 3)
+		require.Equal(t, "needs_configuration", deps[2].Availability.Status)
+	})
+
 	t.Run("filter by query", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/rustic/dependencies?provided_type=rustic_ai.core.llm.LLM", nil)
+		req := httptest.NewRequest(http.MethodGet, "/rustic/catalog/dependencies?provided_type=rustic_ai.core.llm.LLM", nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -374,4 +406,5 @@ llm_gemini:
 	require.Len(t, summaries[0].Dependencies[0].Providers, 2)
 	require.Equal(t, "llm_gemini", summaries[0].Dependencies[0].Providers[0].Key)
 	require.Equal(t, "llm_openai", summaries[0].Dependencies[0].Providers[1].Key)
+
 }

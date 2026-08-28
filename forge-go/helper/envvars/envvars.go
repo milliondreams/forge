@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"sort"
 
 	"github.com/rustic-ai/forge/forge-go/forgepath"
 	"github.com/rustic-ai/forge/forge-go/oauth"
@@ -149,23 +151,6 @@ func BuildAgentEnv(
 	return result, nil
 }
 
-func resolveSecretWithFallback(
-	ctx context.Context,
-	secretProvider secrets.SecretProvider,
-	orgID string,
-	key string,
-) (string, error) {
-	// secrets api stores secrets by orgID
-	secretKey := secrets.SecretStoreKey(orgID, key)
-	val, err := secretProvider.Resolve(ctx, secretKey)
-	if err != nil && errors.Is(err, secrets.ErrSecretNotFound) {
-		// Try key directly - secret is not managed using secrets api
-		val, err = secretProvider.Resolve(ctx, key)
-		return val, err
-	}
-	return val, err
-}
-
 func resolveSecrets(
 	ctx context.Context,
 	agentSpec *protocol.AgentSpec,
@@ -174,30 +159,52 @@ func resolveSecrets(
 	orgID string,
 	envMap map[string]string,
 ) error {
+	type requirement struct {
+		labels   []string
+		required bool
+	}
+	requirements := make(map[string]*requirement)
+	add := func(key, label string, required bool) {
+		req := requirements[key]
+		if req == nil {
+			req = &requirement{}
+			requirements[key] = req
+		}
+		if !slices.Contains(req.labels, label) {
+			req.labels = append(req.labels, label)
+		}
+		req.required = req.required || required
+	}
 	for _, key := range agentSpec.Resources.Secrets {
-		val, err := resolveSecretWithFallback(ctx, secretProvider, orgID, key)
-		if err != nil {
-			if errors.Is(err, secrets.ErrSecretNotFound) {
+		add(key, key, false)
+	}
+	if regEntry != nil {
+		for _, secret := range regEntry.Secrets {
+			add(secret.Key, secret.Label, secret.Optional != nil && !*secret.Optional)
+		}
+	}
+
+	keys := make([]string, 0, len(requirements))
+	for key := range requirements {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	values, failures := resolveStaticSecretBatch(ctx, secretProvider, orgID, keys)
+	for _, key := range keys {
+		req := requirements[key]
+		if err := failures[key]; err != nil {
+			if errors.Is(err, secrets.ErrSecretNotFound) && !req.required {
 				continue
 			}
 			return fmt.Errorf("failed to resolve secret '%s' for agent '%s': %w", key, agentSpec.ID, err)
 		}
-		envMap[key] = val
+		for _, label := range req.labels {
+			envMap[label] = values[key]
+		}
 	}
 
 	if regEntry == nil {
 		return nil
-	}
-
-	for _, s := range regEntry.Secrets {
-		val, err := resolveSecretWithFallback(ctx, secretProvider, orgID, s.Key)
-		if err != nil {
-			if errors.Is(err, secrets.ErrSecretNotFound) && (s.Optional == nil || *s.Optional) {
-				continue
-			}
-			return fmt.Errorf("failed to resolve secret '%s' for agent '%s': %w", s.Key, agentSpec.ID, err)
-		}
-		envMap[s.Label] = val
 	}
 
 	for _, o := range regEntry.OAuth {
@@ -213,4 +220,72 @@ func resolveSecrets(
 	}
 
 	return nil
+}
+
+type batchSecretProvider interface {
+	ResolveBatch(context.Context, []string) (map[string]string, map[string]error)
+}
+
+func resolveStaticSecretBatch(ctx context.Context, provider secrets.SecretProvider, orgID string, keys []string) (map[string]string, map[string]error) {
+	values := make(map[string]string, len(keys))
+	failures := make(map[string]error)
+	scopedToRaw := make(map[string]string, len(keys))
+	scopedKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		scoped := secrets.SecretStoreKey(orgID, key)
+		scopedKeys = append(scopedKeys, scoped)
+		scopedToRaw[scoped] = key
+	}
+
+	batch, supportsBatch := provider.(batchSecretProvider)
+	var scopedValues map[string]string
+	var scopedFailures map[string]error
+	if supportsBatch {
+		scopedValues, scopedFailures = batch.ResolveBatch(ctx, scopedKeys)
+	} else {
+		scopedValues, scopedFailures = resolveIndividually(ctx, provider, scopedKeys)
+	}
+	fallbackKeys := make([]string, 0)
+	for scoped, key := range scopedToRaw {
+		if value, ok := scopedValues[scoped]; ok {
+			values[key] = value
+			continue
+		}
+		err := scopedFailures[scoped]
+		if !errors.Is(err, secrets.ErrSecretNotFound) {
+			failures[key] = err
+			continue
+		}
+		fallbackKeys = append(fallbackKeys, key)
+	}
+
+	var fallbackValues map[string]string
+	var fallbackFailures map[string]error
+	if supportsBatch {
+		fallbackValues, fallbackFailures = batch.ResolveBatch(ctx, fallbackKeys)
+	} else {
+		fallbackValues, fallbackFailures = resolveIndividually(ctx, provider, fallbackKeys)
+	}
+	for _, key := range fallbackKeys {
+		if value, ok := fallbackValues[key]; ok {
+			values[key] = value
+		} else {
+			failures[key] = fallbackFailures[key]
+		}
+	}
+	return values, failures
+}
+
+func resolveIndividually(ctx context.Context, provider secrets.SecretProvider, keys []string) (map[string]string, map[string]error) {
+	values := make(map[string]string, len(keys))
+	failures := make(map[string]error)
+	for _, key := range keys {
+		value, err := provider.Resolve(ctx, key)
+		if err != nil {
+			failures[key] = err
+		} else {
+			values[key] = value
+		}
+	}
+	return values, failures
 }

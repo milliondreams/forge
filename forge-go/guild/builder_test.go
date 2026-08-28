@@ -3,6 +3,7 @@ package guild_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/guild"
@@ -533,6 +534,38 @@ func TestGuildBuilder_FromJSONWithVar(t *testing.T) {
 
 	if agent.Properties["prop1"] != "custom/model_1" {
 		t.Errorf("expected prop1 'custom/model_1', got '%v'", agent.Properties["prop1"])
+	}
+}
+
+func TestRenderConfiguration_UsesExistingMustacheForPublicEntries(t *testing.T) {
+	spec := &protocol.GuildSpec{
+		Configuration: map[string]interface{}{
+			"dynamic_models": []interface{}{
+				map[string]interface{}{
+					"key":          "local-balanced",
+					"display_name": "Balanced Local Model",
+					"aliases":      []interface{}{"standard", "medium"},
+				},
+				"legacy-key",
+			},
+		},
+		Agents: []protocol.AgentSpec{{
+			ID: "analyzer", Name: "Analyzer", Description: "test", ClassName: "example.Agent",
+			Properties: map[string]interface{}{
+				"default_system_prompt": "Enabled:\n{{#dynamic_models}}{{#key}}- {{key}}: {{display_name}} [{{#aliases}}{{.}};{{/aliases}}]\n{{/key}}{{^key}}- {{.}}\n{{/key}}{{/dynamic_models}}",
+			},
+		}},
+	}
+
+	rendered, err := guild.RenderConfiguration(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := rendered.Agents[0].Properties["default_system_prompt"].(string)
+	for _, expected := range []string{"local-balanced", "Balanced Local Model", "standard;medium;", "legacy-key"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("rendered prompt %q does not contain %q", prompt, expected)
+		}
 	}
 }
 

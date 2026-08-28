@@ -148,7 +148,7 @@ Go Version:    <go version>
 OS/Arch:       <os>/<arch>
 ```
 
-The underlying fields live in `forge-go/version/version.go` (`Version`, `GitCommit`, `BuildDate`), which default to `0.4.2` / `none` / `unknown` in source and are overridden at build time via `-ldflags -X`. `make build` stamps them from `git describe --tags --always --dirty`, `git rev-parse --short HEAD`, and a UTC timestamp:
+The underlying fields live in `forge-go/version/version.go` (`Version`, `GitCommit`, `BuildDate`), which default to `0.5.0` / `none` / `unknown` in source and are overridden at build time via `-ldflags -X`. `make build` stamps them from `git describe --tags --always --dirty`, `git rev-parse --short HEAD`, and a UTC timestamp:
 
 ```makefile
 VERSION ?= $(shell git describe --tags --always --dirty)

@@ -246,6 +246,51 @@ filesystem:
 	)
 }
 
+func TestMergeRequiredDependencies_RejectsUnregisteredAgent(t *testing.T) {
+	db, err := store.NewGormStore(store.DriverSQLite, filepath.Join(t.TempDir(), "catalog.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	spec := &protocol.GuildSpec{Agents: []protocol.AgentSpec{{
+		ID:        "missing-agent",
+		ClassName: "test.UnregisteredAgent",
+	}}}
+
+	err = mergeRequiredDependencies(spec, db, filepath.Join(t.TempDir(), "missing-deps.yaml"))
+	require.ErrorContains(t, err, `agent "missing-agent" uses unregistered class "test.UnregisteredAgent"`)
+}
+
+func TestMergeRequiredDependencies_MaterializesRegisteredCustomDependency(t *testing.T) {
+	db, err := store.NewGormStore(store.DriverSQLite, filepath.Join(t.TempDir(), "catalog.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	const className = "test.SearchAgent"
+	require.NoError(t, db.RegisterAgent(&store.CatalogAgentEntry{
+		QualifiedClassName: className,
+		AgentName:          "Search Agent",
+		AgentDependencies: store.JSONB{
+			"search": map[string]interface{}{"required_type": "test.Search"},
+		},
+	}))
+
+	configPath := filepath.Join(t.TempDir(), "deps.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+search:
+  class_name: test.SearchResolver
+  properties:
+    endpoint: http://search.test
+`), 0o644))
+	spec := &protocol.GuildSpec{Agents: []protocol.AgentSpec{{
+		ID:        "search-agent",
+		ClassName: className,
+	}}}
+
+	require.NoError(t, mergeRequiredDependencies(spec, db, configPath))
+	require.Contains(t, spec.DependencyMap, "search")
+	require.Equal(t, "test.SearchResolver", spec.DependencyMap["search"].ClassName)
+}
+
 func TestApplyFilesystemGlobalRoot_RewritesPathBaseOnce(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspaces")
 	spec := &protocol.GuildSpec{

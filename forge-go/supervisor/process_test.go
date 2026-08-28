@@ -242,7 +242,11 @@ func TestProcessSupervisorLaunchesIntoPerAgentWorkDir(t *testing.T) {
 		cwdContent = strings.TrimSpace(string(data))
 		return cwdContent != ""
 	}, 5*time.Second, 50*time.Millisecond)
-	require.Equal(t, filepath.Clean(workDir), filepath.Clean(cwdContent))
+	canonicalWorkDir, err := filepath.EvalSymlinks(workDir)
+	require.NoError(t, err)
+	canonicalCWD, err := filepath.EvalSymlinks(cwdContent)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Clean(canonicalWorkDir), filepath.Clean(canonicalCWD))
 
 	var lines []string
 	require.Eventually(t, func() bool {
@@ -291,16 +295,19 @@ func TestProcessSupervisorAttachedProcessTreeStopsSubprocesses(t *testing.T) {
 
 	workDir := sup.resolveAgentWorkDir(guildID, agentID)
 	childPIDPath := filepath.Join(workDir, "child.pid")
+	childPID := 0
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(childPIDPath)
-		return err == nil
+		childPIDRaw, err := os.ReadFile(childPIDPath)
+		if err != nil {
+			return false
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(childPIDRaw)))
+		if err != nil || pid <= 0 {
+			return false
+		}
+		childPID = pid
+		return true
 	}, 5*time.Second, 50*time.Millisecond)
-
-	childPIDRaw, err := os.ReadFile(childPIDPath)
-	require.NoError(t, err)
-
-	childPID, err := strconv.Atoi(strings.TrimSpace(string(childPIDRaw)))
-	require.NoError(t, err)
 
 	childAlive, err := gopsprocess.PidExists(int32(childPID))
 	require.NoError(t, err)

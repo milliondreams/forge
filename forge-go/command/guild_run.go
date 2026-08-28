@@ -151,7 +151,9 @@ func runGuildREPL(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to subscribe: %w", err)
 	}
-	defer sub.Close()
+	defer func() {
+		_ = sub.Close()
+	}()
 
 	// Create UserProxyAgent only if this guild uses wrapped messages
 	if useWrappedMessages {
@@ -304,10 +306,12 @@ func showAgentStatus(w io.Writer, runtime guildRuntime, guildID string) error {
 		return err
 	}
 
-	fmt.Fprintln(w, "\n🤖 Agent Status:")
+	if _, err := fmt.Fprintln(w, "\n🤖 Agent Status:"); err != nil {
+		return err
+	}
 	if len(statuses) == 0 {
-		fmt.Fprintln(w, "   No agents found")
-		return nil
+		_, err := fmt.Fprintln(w, "   No agents found")
+		return err
 	}
 
 	for agentID, status := range statuses {
@@ -325,15 +329,18 @@ func showAgentStatus(w io.Writer, runtime guildRuntime, guildID string) error {
 
 		// Get agent display name
 		agentName := runtime.GetAgentName(agentID)
+		var err error
 		if agentName != agentID {
-			fmt.Fprintf(w, "   %s %s (PID: %d) - %s\n", stateIcon, agentName, status.PID, status.State)
+			_, err = fmt.Fprintf(w, "   %s %s (PID: %d) - %s\n", stateIcon, agentName, status.PID, status.State)
 		} else {
-			fmt.Fprintf(w, "   %s %s (PID: %d) - %s\n", stateIcon, agentID, status.PID, status.State)
+			_, err = fmt.Fprintf(w, "   %s %s (PID: %d) - %s\n", stateIcon, agentID, status.PID, status.State)
+		}
+		if err != nil {
+			return err
 		}
 	}
-	fmt.Fprintln(w)
-
-	return nil
+	_, err = fmt.Fprintln(w)
+	return err
 }
 
 // selectUserMessageTopic decides which topic user input should be published to
@@ -387,7 +394,9 @@ func sendChatMessage(w io.Writer, runtime guildRuntime, guildID, userID, userNam
 		actualTopic = topic
 	}
 
-	fmt.Fprintf(w, "📤 Sending to topic: %s (format: %s)\n", actualTopic, msg.Format)
+	if _, err := fmt.Fprintf(w, "📤 Sending to topic: %s (format: %s)\n", actualTopic, msg.Format); err != nil {
+		return fmt.Errorf("write message status: %w", err)
+	}
 	if err := runtime.PublishMessage(guildID, actualTopic, msg); err != nil {
 		return fmt.Errorf("failed to publish: %w", err)
 	}
@@ -409,7 +418,7 @@ func displayMessages(ctx context.Context, w io.Writer, sub messageSource, runtim
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "\n❌ Subscription error: %v\n> ", err)
+			_, _ = fmt.Fprintf(w, "\n❌ Subscription error: %v\n> ", err)
 		}
 	}
 }
@@ -418,7 +427,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 	// Debug: show all message formats in verbose mode only
 	if verbose {
 		topicsDebug := msg.Topics.ToSlice()
-		fmt.Fprintf(w, "\n[DEBUG] Format: %-50s Topics: %v\n", msg.Format, topicsDebug)
+		_, _ = fmt.Fprintf(w, "\n[DEBUG] Format: %-50s Topics: %v\n", msg.Format, topicsDebug)
 	}
 
 	// Skip internal system messages unless verbose
@@ -469,8 +478,8 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 	topicStr := strings.Join(topics, ", ")
 
 	// Message header
-	fmt.Fprintln(w, "\n"+strings.Repeat("─", 70))
-	fmt.Fprintf(w, "📨 [%s] %s\n", timestamp, topicStr)
+	_, _ = fmt.Fprintln(w, "\n"+strings.Repeat("─", 70))
+	_, _ = fmt.Fprintf(w, "📨 [%s] %s\n", timestamp, topicStr)
 
 	// Get sender name - use agent name map if available
 	senderName := ""
@@ -488,10 +497,10 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 
 	// Display sender - just the name, not the ID (cleaner)
 	if senderName != "" {
-		fmt.Fprintf(w, "   From: %s\n", senderName)
+		_, _ = fmt.Fprintf(w, "   From: %s\n", senderName)
 	} else if senderID != "" {
 		// Fallback to ID if no name
-		fmt.Fprintf(w, "   From: %s\n", senderID)
+		_, _ = fmt.Fprintf(w, "   From: %s\n", senderID)
 	}
 
 	// Message content
@@ -501,7 +510,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 			// Pretty print payload
 			if verbose {
 				prettyPayload, _ := json.MarshalIndent(payload, "   ", "  ")
-				fmt.Fprintf(w, "   Payload:\n   %s\n", string(prettyPayload))
+				_, _ = fmt.Fprintf(w, "   Payload:\n   %s\n", string(prettyPayload))
 			} else {
 				// Show condensed version - try different message formats
 				displayed := false
@@ -512,7 +521,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 						if content, ok := firstMsg["content"].([]any); ok && len(content) > 0 {
 							if textContent, ok := content[0].(map[string]any); ok {
 								if text, ok := textContent["text"].(string); ok {
-									fmt.Fprintf(w, "   💬 %s\n", text)
+									_, _ = fmt.Fprintf(w, "   💬 %s\n", text)
 									displayed = true
 								}
 							}
@@ -526,7 +535,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 						if choice, ok := choices[0].(map[string]any); ok {
 							if message, ok := choice["message"].(map[string]any); ok {
 								if content, ok := message["content"].(string); ok {
-									fmt.Fprintf(w, "   💬 %s\n", content)
+									_, _ = fmt.Fprintf(w, "   💬 %s\n", content)
 									displayed = true
 								}
 							}
@@ -537,7 +546,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 				// Try simple text field
 				if !displayed {
 					if text, ok := payload["text"].(string); ok {
-						fmt.Fprintf(w, "   💬 %s\n", text)
+						_, _ = fmt.Fprintf(w, "   💬 %s\n", text)
 						displayed = true
 					}
 				}
@@ -545,7 +554,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 				// Try content field directly (common in some formats)
 				if !displayed {
 					if content, ok := payload["content"].(string); ok {
-						fmt.Fprintf(w, "   💬 %s\n", content)
+						_, _ = fmt.Fprintf(w, "   💬 %s\n", content)
 						displayed = true
 					}
 				}
@@ -554,9 +563,9 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 				if !displayed {
 					payloadBytes, _ := json.Marshal(payload)
 					if len(payloadBytes) > 150 {
-						fmt.Fprintf(w, "   📄 %s...\n", string(payloadBytes[:150]))
+						_, _ = fmt.Fprintf(w, "   📄 %s...\n", string(payloadBytes[:150]))
 					} else {
-						fmt.Fprintf(w, "   📄 %s\n", string(payloadBytes))
+						_, _ = fmt.Fprintf(w, "   📄 %s\n", string(payloadBytes))
 					}
 				}
 			}
@@ -565,7 +574,7 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 
 	// Routing information
 	if showRouting && len(msg.MessageHistory) > 0 {
-		fmt.Fprintln(w, "   🔀 Routing History:")
+		_, _ = fmt.Fprintln(w, "   🔀 Routing History:")
 		for i, entry := range msg.MessageHistory {
 			agent := ""
 			agentID := ""
@@ -604,18 +613,18 @@ func printMessage(w io.Writer, msg *protocol.Message, runtime guildRuntime, user
 				toTopics = fmt.Sprintf(" → %s", strings.Join(entry.ToTopics, ", "))
 			}
 
-			fmt.Fprintf(w, "      %d. %s (%s)%s%s%s\n",
+			_, _ = fmt.Fprintf(w, "      %d. %s (%s)%s%s%s\n",
 				i+1, agent, processor, fromTopic, toTopics, reasonStr)
 		}
 	}
 
 	if verbose && msg.RoutingSlip != nil {
-		fmt.Fprintln(w, "   📋 Routing Slip:")
+		_, _ = fmt.Fprintln(w, "   📋 Routing Slip:")
 		slipBytes, _ := json.MarshalIndent(msg.RoutingSlip, "      ", "  ")
-		fmt.Fprintf(w, "      %s\n", string(slipBytes))
+		_, _ = fmt.Fprintf(w, "      %s\n", string(slipBytes))
 	}
 
-	fmt.Fprint(w, "> ")
+	_, _ = fmt.Fprint(w, "> ")
 }
 
 func findForgeRoot(startDir string) string {

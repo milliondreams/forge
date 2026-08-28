@@ -194,6 +194,7 @@ func userCommsHandler(msgClient messaging.Backend, guildStore store.Store, gemGe
 			if wireShape == WireShapeProxyCompat {
 				userMsg = proxyNormalizeIncomingEnvelope(userMsg)
 			}
+			normalizeAuthenticatedUserMessageName(userMsg, userID, userName)
 			priority := parsePriority(userMsg["priority"])
 			id, ok := parseIncomingGemstoneID(userMsg["id"])
 			if !ok || id.Timestamp-(time.Now().UnixMilli()) > 1000 {
@@ -249,6 +250,32 @@ func userCommsHandler(msgClient messaging.Backend, guildStore store.Store, gemGe
 
 			_ = msgClient.PublishMessage(ctx, guildID, userTopic(userID), wrapped)
 			receiveSpan.End()
+		}
+	}
+}
+
+func normalizeAuthenticatedUserMessageName(userMsg map[string]interface{}, userID, userName string) {
+	format, _ := userMsg["format"].(string)
+	format = normalizeIncomingFormat(format)
+	if !strings.HasSuffix(format, "ChatCompletionRequest") {
+		return
+	}
+	payload, ok := coalesceMapValue(userMsg, "payload", "data").(map[string]interface{})
+	if !ok {
+		return
+	}
+	messages, ok := payload["messages"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range messages {
+		message, ok := raw.(map[string]interface{})
+		if !ok || message["role"] != "user" {
+			continue
+		}
+		name, _ := message["name"].(string)
+		if strings.TrimSpace(name) == "" || name == userID {
+			message["name"] = userName
 		}
 	}
 }
