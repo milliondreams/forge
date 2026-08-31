@@ -11,6 +11,22 @@ Forge's distributed mode splits the binary's two roles across processes:
 
 Both sides talk to each other only through the broker (Redis lists or NATS JetStream) and the node-registration HTTP endpoints — there is no direct RPC for placement.
 
+### Dependency and model endpoint reachability
+
+The control plane materializes a selected dependency profile into the agent
+spec, but the spawned agent process opens the connection to an LLM provider.
+Consequently, every eligible worker must be able to resolve and reach the
+profile's endpoint. A URL such as `http://localhost:55262/v1` refers to the
+worker or agent container where the request originates, not to the Forge
+control-plane host.
+
+Use service DNS or another routable address for shared inference services, and
+provide the same dependency profile keys to the server and clients through
+their `--dependency-config` options. When supervisors create a separate network
+namespace, explicitly configure service routing or a host gateway. See
+[Rustic UI with External Forge](rustic-ui-external-forge.md) for the hosted UI
+ownership and security boundary.
+
 ```mermaid
 flowchart LR
     subgraph Control Plane

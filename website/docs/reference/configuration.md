@@ -58,6 +58,20 @@ Forge reads four YAML config files. None of them are stored under `~/.forge` by 
 
 Declares, per dependency class, what runtime resources an agent needs and how they're satisfied — this is the source that `filesystem.DependencyConfig` (path base, protocol, storage options) is built from per guild. Loaded from `FORGE_DEPENDENCY_CONFIG` (default `conf/agent-dependencies.yaml`).
 
+Configuration ownership depends on the deployment:
+
+- a standalone or distributed Forge operator owns this file and supplies the
+  same profile keys to the server and eligible clients;
+- Rustic Studio desktop may generate a separate effective runtime file for its
+  bundled Forge without overwriting persistent user configuration;
+- hosted Rustic UI never reads or writes this file and only consumes the
+  read-only `/rustic/dependencies` catalog exposed by external Forge.
+
+An endpoint inside a dependency profile is used by the spawned agent process.
+It must be reachable from the agent worker's network namespace; `localhost`
+does not automatically refer to the Forge control plane. See
+[Rustic UI with External Forge](../guides/rustic-ui-external-forge.md).
+
 ### `local-model-catalog.yaml`
 
 Describes locally runnable model entries used by the model-fit/local-model subsystem (which local LLM binaries and weights are available, and what hardware they need). Loaded from `FORGE_LOCAL_MODEL_CATALOG` (default `conf/local-model-catalog.yaml`).

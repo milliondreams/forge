@@ -2,6 +2,14 @@
 
 Forge runs a full guild runtime on a laptop with zero external services. One binary, one process, no Docker Compose file, no managed Redis, no Postgres — just `forge server --with-client` and a workspace directory on disk.
 
+This page describes generic Forge single-process mode. Rustic Studio's Electron
+distribution adds a desktop owner around that topology: Studio packages Forge
+and llama.cpp, supervises only the child processes it starts, and presents
+Forge's `/rustic/*` API to its renderer. Those Studio lifecycle rules do not
+apply to a hosted Rustic UI connected to an external Forge. See
+[Rustic UI with External Forge](../guides/rustic-ui-external-forge.md) for that
+deployment boundary.
+
 This page covers the single-process mode, how Forge picks a local LLM that actually fits your hardware, and how secrets, telemetry, and workspace files stay entirely on-device.
 
 ## Why single-process mode exists
