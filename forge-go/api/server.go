@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -58,40 +57,7 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 		localUI:        localUI,
 		listenAddr:     listenAddr,
 	}
-	migrateLegacyLocalGuildMemberships(db, localUI.user.ID)
 	return s
-}
-
-func migrateLegacyLocalGuildMemberships(db store.Store, userID string) {
-	if db == nil || userID == localDummyUserID {
-		return
-	}
-
-	legacyGuilds, err := db.GetGuildsForUser(localDummyUserID, nil, nil)
-	if err != nil {
-		slog.Warn("failed to read legacy local guild memberships", "err", err)
-		return
-	}
-	for _, guild := range legacyGuilds {
-		users, err := db.GetUsersForGuild(guild.ID)
-		if err != nil {
-			slog.Warn("failed to read guild users during local identity migration", "guild_id", guild.ID, "err", err)
-			continue
-		}
-		alreadyMember := false
-		for _, existingUserID := range users {
-			if existingUserID == userID {
-				alreadyMember = true
-				break
-			}
-		}
-		if alreadyMember {
-			continue
-		}
-		if err := db.AddUserToGuild(guild.ID, userID); err != nil {
-			slog.Warn("failed to migrate local guild membership", "guild_id", guild.ID, "user_id", userID, "err", err)
-		}
-	}
 }
 
 // WithSecureStores initializes all managed credential persistence against the

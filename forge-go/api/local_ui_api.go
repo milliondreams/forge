@@ -201,10 +201,6 @@ func (s *Server) registerLocalIdentityRoutes(router gin.IRouter) {
 		for _, id := range userIDs {
 			if id == s.localUI.user.ID {
 				resp = append(resp, s.localUI.user)
-			} else if id == localDummyUserID && s.localUI.user.ID != localDummyUserID {
-				legacyUser := s.localUI.user
-				legacyUser.ID = localDummyUserID
-				resp = append(resp, legacyUser)
 			}
 		}
 		c.JSON(http.StatusOK, resp)

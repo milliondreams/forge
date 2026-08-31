@@ -55,7 +55,7 @@ func TestNewLocalUIStateRejectsUnsafeConfiguredIdentity(t *testing.T) {
 	require.Equal(t, localDummyUserID, state.user.ID)
 }
 
-func TestBuildRouter_LocalIdentitySearchResolvesLegacyUser(t *testing.T) {
+func TestBuildRouter_LocalIdentitySearchReturnsOnlyConfiguredUser(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_PUBLIC_API", "true")
 	t.Setenv("FORGE_ENABLE_UI_API", "false")
 	t.Setenv("FORGE_IDENTITY_MODE", "local")
@@ -73,7 +73,6 @@ func TestBuildRouter_LocalIdentitySearchResolvesLegacyUser(t *testing.T) {
 	var users []localUserInfo
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &users))
 	require.Equal(t, []localUserInfo{
-		{ID: localDummyUserID, FullName: "Rohit Example", Email: "anonymous@example.com"},
 		{ID: "rohit", FullName: "Rohit Example", Email: "anonymous@example.com"},
 	}, users)
 }
