@@ -291,7 +291,7 @@ llm_gemini:
 
 	agentLevel := true
 	varName := "llm"
-	resolvedType := "rustic_ai.core.llm.LLM"
+	requiredType := "rustic_ai.core.llm.LLM"
 	if err := db.RegisterAgent(&store.CatalogAgentEntry{
 		QualifiedClassName: "rustic_ai.llm_agent.llm_agent.LLMAgent",
 		AgentName:          "LLMAgent",
@@ -303,7 +303,7 @@ llm_gemini:
 				"dependency_key": "llm",
 				"agent_level":    agentLevel,
 				"variable_name":  varName,
-				"resolved_type":  resolvedType,
+				"required_type":  requiredType,
 			},
 		},
 	}); err != nil {

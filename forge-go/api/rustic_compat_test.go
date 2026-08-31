@@ -200,7 +200,7 @@ func TestRusticCatalogAgentDependenciesRoute(t *testing.T) {
 				"dependency_key": "llm",
 				"agent_level":    agentLevel,
 				"variable_name":  varName,
-				"resolved_type":  depType,
+				"required_type":  depType,
 			},
 		},
 	}))
@@ -217,8 +217,8 @@ func TestRusticCatalogAgentDependenciesRoute(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
 	require.Len(t, deps, 1)
 	require.Equal(t, "llm", deps[0].DependencyKey)
-	require.NotNil(t, deps[0].ResolvedType)
-	require.Equal(t, depType, *deps[0].ResolvedType)
+	require.NotNil(t, deps[0].RequiredType)
+	require.Equal(t, depType, *deps[0].RequiredType)
 	require.NotNil(t, deps[0].VariableName)
 	require.Equal(t, varName, *deps[0].VariableName)
 }
@@ -360,7 +360,7 @@ llm_gemini:
 				"dependency_key": "llm",
 				"agent_level":    agentLevel,
 				"variable_name":  varName,
-				"resolved_type":  depType,
+				"required_type":  depType,
 			},
 		},
 	}))
@@ -401,8 +401,8 @@ llm_gemini:
 	require.Len(t, summaries[0].Dependencies, 1)
 	require.Equal(t, "agent:research_agent:llm", summaries[0].Dependencies[0].BindingKey)
 	require.Equal(t, "llm", summaries[0].Dependencies[0].DependencyKey)
-	require.NotNil(t, summaries[0].Dependencies[0].ResolvedType)
-	require.Equal(t, depType, *summaries[0].Dependencies[0].ResolvedType)
+	require.NotNil(t, summaries[0].Dependencies[0].RequiredType)
+	require.Equal(t, depType, *summaries[0].Dependencies[0].RequiredType)
 	require.Len(t, summaries[0].Dependencies[0].Providers, 2)
 	require.Equal(t, "llm_gemini", summaries[0].Dependencies[0].Providers[0].Key)
 	require.Equal(t, "llm_openai", summaries[0].Dependencies[0].Providers[1].Key)

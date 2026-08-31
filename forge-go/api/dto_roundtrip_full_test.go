@@ -81,7 +81,7 @@ func TestAPIDTOs_JSONRoundTrip_FullMatrix(t *testing.T) {
 						DependencyKey: "llm",
 						AgentLevel:    ptrBool(true),
 						VariableName:  ptrString("llm"),
-						ResolvedType:  ptrString("rustic_ai.core.llm.LLM"),
+						RequiredType:  ptrString("rustic_ai.core.llm.LLM"),
 					},
 				},
 			},

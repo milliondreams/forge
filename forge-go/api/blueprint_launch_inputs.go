@@ -238,9 +238,6 @@ func validateDependencyAnnotation(s store.Store, bp *store.Blueprint, fieldName 
 	}
 	for _, dependency := range catalogAgentToResponse(entry).AgentDependencies {
 		requiredType := dependency.RequiredType
-		if requiredType == nil {
-			requiredType = dependency.ResolvedType
-		}
 		if dependency.DependencyKey == annotation.Target.DependencyKey && requiredType != nil && *requiredType == annotation.RequiredType {
 			return nil
 		}

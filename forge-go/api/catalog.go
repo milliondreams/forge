@@ -1020,9 +1020,6 @@ func resolveBlueprintDependencies(s store.Store, bp *store.Blueprint, configPath
 			for _, dep := range resp.AgentDependencies {
 				providers := []ConfiguredDependencyEntry{}
 				requiredType := dep.RequiredType
-				if requiredType == nil {
-					requiredType = dep.ResolvedType
-				}
 				if requiredType != nil {
 					providers = append(providers, byProvidedType[*requiredType]...)
 				}
@@ -1035,7 +1032,6 @@ func resolveBlueprintDependencies(s store.Store, bp *store.Blueprint, configPath
 					AgentLevel:    dep.AgentLevel,
 					VariableName:  dep.VariableName,
 					RequiredType:  requiredType,
-					ResolvedType:  dep.ResolvedType,
 					Providers:     providers,
 				})
 			}
@@ -1187,9 +1183,6 @@ func catalogAgentToResponse(a *store.CatalogAgentEntry) AgentEntryResponse {
 			var dep AgentDependencyEntry
 			if err := json.Unmarshal(raw, &dep); err != nil {
 				continue
-			}
-			if dep.RequiredType == nil {
-				dep.RequiredType = dep.ResolvedType
 			}
 			deps = append(deps, dep)
 		}
