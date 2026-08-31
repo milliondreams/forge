@@ -10,7 +10,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/protocol"
 )
 
-const dependencyAnnotationKey = "x-rustic-dependency"
+const dependencyAnnotationKey = "x-rustic-profile"
 
 const (
 	dependencyValueShapeKey         = "key"

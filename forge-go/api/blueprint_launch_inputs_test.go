@@ -15,6 +15,30 @@ import (
 
 const testLLMType = "rustic_ai.core.guild.agent_ext.depends.llm.llm.LLM"
 
+func TestDependencyAnnotationUsesCanonicalProfileKey(t *testing.T) {
+	if dependencyAnnotationKey != "x-rustic-profile" {
+		t.Fatalf("dependency annotation key = %q", dependencyAnnotationKey)
+	}
+
+	bp := &store.Blueprint{Spec: store.JSONB{
+		"configuration_schema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"legacy": map[string]interface{}{
+					"type": "string",
+					"x-rustic-dependency": map[string]interface{}{
+						"selection": "invalid",
+					},
+				},
+			},
+		},
+	}}
+
+	if err := validateBlueprintDependencyAnnotations(nil, bp); err != nil {
+		t.Fatalf("legacy annotation should not be interpreted: %v", err)
+	}
+}
+
 func TestMaterializeLocalNomicEmbeddingSelection(t *testing.T) {
 	db, err := store.NewGormStore("sqlite", filepath.Join(t.TempDir(), "catalog.db"))
 	if err != nil {
