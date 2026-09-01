@@ -114,7 +114,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 		natsURL = cfg.NATSUrl
 		if natsURL == "" {
 			l.Info("No NATS address provided with --backend nats. Booting Embedded NATS...", "bind_addr", cfg.EmbeddedNATSAddr)
-			embeddedNATS, err := embed.StartEmbeddedNATSAt(cfg.EmbeddedNATSAddr)
+			embeddedNATS, err := embed.StartPersistentEmbeddedNATSAt(cfg.EmbeddedNATSAddr)
 			if err != nil {
 				return fmt.Errorf("failed to start embedded NATS: %w", err)
 			}

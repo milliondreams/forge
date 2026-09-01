@@ -2,6 +2,8 @@ package embed
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +16,10 @@ func TestEmbeddedNATS(t *testing.T) {
 	en, err := StartEmbeddedNATS()
 	require.NoError(t, err)
 	require.NotNil(t, en)
-	defer en.Close()
+	storeDir := en.storeDir
+	t.Cleanup(en.Close)
+
+	require.DirExists(t, storeDir)
 
 	require.NotEmpty(t, en.Host())
 	require.NotZero(t, en.Port())
@@ -36,6 +41,58 @@ func TestEmbeddedNATS(t *testing.T) {
 	msg, err := sub.NextMsg(2 * time.Second)
 	require.NoError(t, err)
 	require.Equal(t, []byte("hello"), msg.Data)
+}
+
+func TestEmbeddedNATSCloseRemovesTemporaryStore(t *testing.T) {
+	en, err := StartEmbeddedNATS()
+	require.NoError(t, err)
+	storeDir := en.storeDir
+	require.DirExists(t, storeDir)
+
+	en.Close()
+	require.NoDirExists(t, storeDir)
+}
+
+func TestPersistentEmbeddedNATSRetainsJetStreamAcrossRestart(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "nats")
+
+	first, err := startEmbeddedNATSAt("", storeDir, false, 5*time.Second)
+	require.NoError(t, err)
+	nc, err := first.Client()
+	require.NoError(t, err)
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	_, err = js.AddStream(&nats.StreamConfig{Name: "HISTORY", Subjects: []string{"history.messages"}})
+	require.NoError(t, err)
+	_, err = js.Publish("history.messages", []byte("survives-restart"))
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	nc.Close()
+	first.Close()
+	require.DirExists(t, storeDir)
+
+	second, err := startEmbeddedNATSAt("", storeDir, false, 5*time.Second)
+	require.NoError(t, err)
+	t.Cleanup(second.Close)
+	nc, err = second.Client()
+	require.NoError(t, err)
+	defer nc.Close()
+	js, err = nc.JetStream()
+	require.NoError(t, err)
+	msg, err := js.GetLastMsg("HISTORY", "history.messages")
+	require.NoError(t, err)
+	require.Equal(t, []byte("survives-restart"), msg.Data)
+}
+
+func TestPersistentEmbeddedNATSStartupFailurePreservesStore(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "nats")
+	require.NoError(t, os.MkdirAll(storeDir, 0o755))
+	marker := filepath.Join(storeDir, "existing-data")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0o600))
+
+	_, err := startEmbeddedNATSAt("invalid-address", storeDir, false, 500*time.Millisecond)
+	require.Error(t, err)
+	require.FileExists(t, marker)
 }
 
 func TestEmbeddedNATSAt_ExplicitAddress(t *testing.T) {

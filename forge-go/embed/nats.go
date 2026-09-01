@@ -16,8 +16,9 @@ import (
 
 // EmbeddedNATS wraps an in-process NATS server with JetStream enabled.
 type EmbeddedNATS struct {
-	server   *natsserver.Server
-	storeDir string
+	server       *natsserver.Server
+	storeDir     string
+	cleanupStore bool
 }
 
 // StartEmbeddedNATS spins up a new in-process NATS server on an ephemeral port.
@@ -28,14 +29,31 @@ func StartEmbeddedNATS() (*EmbeddedNATS, error) {
 // StartEmbeddedNATSAt spins up a new in-process NATS server on a specific address.
 // If addr is empty, an ephemeral port is used.
 func StartEmbeddedNATSAt(addr string) (*EmbeddedNATS, error) {
-	storeRoot, err := resolveEmbeddedNATSStoreRoot()
+	storeDir, err := os.MkdirTemp("", "forge-embedded-nats-*")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create temporary embedded NATS store dir: %w", err)
+	}
+	return startEmbeddedNATSAt(addr, storeDir, true, 15*time.Second)
+}
+
+// StartPersistentEmbeddedNATSAt spins up an in-process NATS server whose
+// JetStream store is preserved under FORGE_HOME across server restarts.
+func StartPersistentEmbeddedNATSAt(addr string) (*EmbeddedNATS, error) {
+	return startEmbeddedNATSAt(addr, forgepath.Resolve("nats"), false, 15*time.Second)
+}
+
+func startEmbeddedNATSAt(addr, storeDir string, cleanupStore bool, readyTimeout time.Duration) (*EmbeddedNATS, error) {
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		if cleanupStore {
+			_ = os.RemoveAll(storeDir)
+		}
+		return nil, fmt.Errorf("failed to create embedded NATS store dir %s: %w", storeDir, err)
 	}
 
-	storeDir, err := os.MkdirTemp(storeRoot, "embedded-*")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embedded NATS store dir under %s: %w", storeRoot, err)
+	cleanupOnError := func() {
+		if cleanupStore {
+			_ = os.RemoveAll(storeDir)
+		}
 	}
 
 	opts := &natsserver.Options{
@@ -52,10 +70,12 @@ func StartEmbeddedNATSAt(addr string) (*EmbeddedNATS, error) {
 	if addr != "" {
 		host, portStr, err := net.SplitHostPort(addr)
 		if err != nil {
+			cleanupOnError()
 			return nil, fmt.Errorf("invalid address %q: %w", addr, err)
 		}
 		var port int
 		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+			cleanupOnError()
 			return nil, fmt.Errorf("invalid port in address %q: %w", addr, err)
 		}
 		opts.Host = host
@@ -64,36 +84,20 @@ func StartEmbeddedNATSAt(addr string) (*EmbeddedNATS, error) {
 
 	s, err := natsserver.NewServer(opts)
 	if err != nil {
-		_ = os.RemoveAll(storeDir)
+		cleanupOnError()
 		return nil, fmt.Errorf("failed to create embedded NATS server: %w", err)
 	}
 
 	go s.Start()
 
-	if !s.ReadyForConnections(15 * time.Second) {
+	if !s.ReadyForConnections(readyTimeout) {
 		s.Shutdown()
-		_ = os.RemoveAll(storeDir)
-		return nil, fmt.Errorf("embedded NATS server did not become ready within 15s")
+		s.WaitForShutdown()
+		cleanupOnError()
+		return nil, fmt.Errorf("embedded NATS server did not become ready within %s", readyTimeout)
 	}
 
-	return &EmbeddedNATS{server: s, storeDir: storeDir}, nil
-}
-
-func resolveEmbeddedNATSStoreRoot() (string, error) {
-	storeRoot := forgepath.Resolve("nats")
-	if err := os.MkdirAll(storeRoot, 0o755); err == nil {
-		probeDir, probeErr := os.MkdirTemp(storeRoot, ".probe-*")
-		if probeErr == nil {
-			_ = os.RemoveAll(probeDir)
-			return storeRoot, nil
-		}
-	}
-
-	fallbackRoot, err := os.MkdirTemp("", "forge-nats-*")
-	if err != nil {
-		return "", fmt.Errorf("failed to create NATS store dir %s and fallback temp dir: %w", storeRoot, err)
-	}
-	return fallbackRoot, nil
+	return &EmbeddedNATS{server: s, storeDir: storeDir, cleanupStore: cleanupStore}, nil
 }
 
 // Host returns the bound hostname.
@@ -122,12 +126,14 @@ func (e *EmbeddedNATS) Client() (*nats.Conn, error) {
 	return nats.Connect(e.ClientURL())
 }
 
-// Close shuts down the embedded server and removes its isolated JetStream store directory.
+// Close shuts down the embedded server, waits for JetStream to flush, and
+// removes the store only for explicitly temporary instances.
 func (e *EmbeddedNATS) Close() {
 	if e.server != nil {
 		e.server.Shutdown()
+		e.server.WaitForShutdown()
 	}
-	if e.storeDir != "" {
+	if e.cleanupStore && e.storeDir != "" {
 		_ = os.RemoveAll(filepath.Clean(e.storeDir))
 	}
 }
