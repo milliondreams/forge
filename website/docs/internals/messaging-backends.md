@@ -28,7 +28,7 @@ type Subscription interface {
 Every topic is namespaced by guild ID before it ever touches a backend: `namespace + ":" + topic`. This mirrors the Python `MessagingInterface`, which internally prepends `{guild_id}:` to all topics. `PublishMessage` stores the namespaced form but sets `msg.TopicPublishedTo` to the bare topic.
 
 !!! note "Wire compatibility is deliberate"
-    Topic naming, TTL env vars, and every JetStream subject/stream/KV bucket name in this page mirror the Python Rustic AI runtime exactly. This isn't incidental — it's what lets a Go supervisor and Python agents share one bus.
+    Topic naming and every JetStream subject/stream/KV bucket name in this page mirror the Python Rustic AI runtime. In Forge's `supervisor-zmq` mode, Python agents use ZeroMQ and the Go bridge owns the durable NATS writes.
 
 ## Redis: pipelined cache + ZSET + PubSub
 
@@ -154,32 +154,11 @@ This makes live delivery **at-most-once and lossy under back-pressure** by desig
 !!! warning "A busy consumer silently loses messages"
     If a subscriber's channel is full for 50ms, the message is dropped — not queued, not retried. This is the single most common cause of "why didn't my agent see that message" reports. Check for a warning log at drop time, then check `GetMessagesSince` against the consumer's last known ID to confirm nothing was actually lost from history — only from the live tier.
 
-## TTLs and retention
+## Retention
 
-Both backends default to a **3600-second (1 hour)** message TTL, each configurable via its own environment variable (integer seconds):
+Redis's direct message-ID cache defaults to a **3600-second (1 hour)** TTL through `RUSTIC_AI_REDIS_MSG_TTL`; its per-topic ZSET history remains durable.
 
-| Backend | Env var | Default |
-|---|---|---|
-| Redis | `RUSTIC_AI_REDIS_MSG_TTL` | 3600 |
-| NATS | `RUSTIC_AI_NATS_MSG_TTL` | 3600 |
-
-NATS layers one more rule on top. Certain namespaced topics get a much longer JetStream `MaxAge` — **60 days** — regardless of the configured default:
-
-```go
-const longRetentionTTL = 60 * 24 * time.Hour // 60 days
-var longRetentionTopics = []string{"user_notifications:", "user_message_broadcast"}
-
-func (b *NATSBackend) ttlForTopic(nsTopic string) time.Duration {
-	for _, pattern := range longRetentionTopics {
-		if strings.Contains(nsTopic, pattern) {
-			return longRetentionTTL
-		}
-	}
-	return b.config.MessageTTL // default 3600s (RUSTIC_AI_NATS_MSG_TTL)
-}
-```
-
-The match is a substring `Contains` check against the *namespaced* topic, so any topic containing `user_notifications:` (e.g. per-user `user_notifications:{id}`) or `user_message_broadcast` gets the 60-day stream retention — notification history and broadcast history are expected to outlive an ordinary hour-long message TTL. Redis has no equivalent per-topic override; every key in Redis shares the single configured TTL.
+Forge's Go NATS messaging backend uses guild-lifetime retention for every durable message. JetStream topic streams use `MaxAge: 0`, and per-guild message-ID KV buckets use `TTL: 0`. The Go backend does not read a message-TTL environment setting, and it has no special-case retention window for user-facing topics.
 
 ## Embedded servers and isolation
 
@@ -232,14 +211,11 @@ kv.Put(strconv.FormatUint(msg.ID, 10), msgBytes)
 b.nc.Publish(nsTopic, msgBytes)
 ```
 
-**Long-retention TTL logic** — how a topic earns 60 days instead of 1 hour:
+**NATS retention** — durable messages and their ID index do not expire on a timer:
 
 ```go
-if strings.Contains(nsTopic, "user_notifications:") ||
-	strings.Contains(nsTopic, "user_message_broadcast") {
-	return longRetentionTTL // 60 days
-}
-return b.config.MessageTTL // RUSTIC_AI_NATS_MSG_TTL, default 3600s
+streamConfig.MaxAge = 0
+keyValueConfig.TTL = 0
 ```
 
 ## Related

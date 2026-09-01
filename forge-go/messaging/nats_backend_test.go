@@ -86,6 +86,41 @@ func TestNATSPublishAndRetrieveMessages(t *testing.T) {
 	assert.Equal(t, msg2.ID, byID[1].ID)
 }
 
+func TestNATSDurableMessageStorageHasNoExpiry(t *testing.T) {
+	t.Setenv("RUSTIC_AI_NATS_MSG_TTL", "1")
+	s := startInProcessNATSServer(t)
+
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	defer func() { _ = nc.Drain() }()
+
+	backend, err := messaging.NewNATSBackend(nc)
+	require.NoError(t, err)
+	defer func() { _ = backend.Close() }()
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	gen, err := protocol.NewGemstoneGenerator(1)
+	require.NoError(t, err)
+
+	for _, topic := range []string{"ordinary_topic", "user_message_broadcast"} {
+		id, generateErr := gen.Generate(protocol.PriorityNormal)
+		require.NoError(t, generateErr)
+		require.NoError(t, backend.PublishMessage(ctx, "guild-retention", topic, &protocol.Message{ID: id.ToInt()}))
+
+		stream, streamErr := js.StreamInfo(
+			messaging.StreamNameForTest("guild-retention:" + topic),
+		)
+		require.NoError(t, streamErr)
+		assert.Zero(t, stream.Config.MaxAge)
+	}
+
+	kvStream, err := js.StreamInfo("KV_" + messaging.KvBucketNameForTest("guild-retention"))
+	require.NoError(t, err)
+	assert.Zero(t, kvStream.Config.MaxAge)
+}
+
 func TestNATSGetMessagesSince(t *testing.T) {
 	s := startInProcessNATSServer(t)
 

@@ -146,7 +146,6 @@ The `--db` DSN itself isn't an env var, but `FORGE_DATABASE_URL` (documented und
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUSTIC_AI_REDIS_MSG_TTL` | `3600` (seconds) | TTL for Redis-backed message history entries. |
-| `RUSTIC_AI_NATS_MSG_TTL` | `3600` (seconds) | TTL for NATS JetStream message history (60 days for topics matching `user_notifications:` / `user_message_broadcast`, regardless of this value). |
 | `RUSTIC_AI_MESSAGING_MODULE` | — | Python messaging backend module the server tells agents to use (e.g. `rustic_ai.nats.messaging.backend`). |
 | `RUSTIC_AI_MESSAGING_CLASS` | — | Python messaging backend class (e.g. `NATSMessagingBackend`). |
 | `RUSTIC_AI_MESSAGING_BACKEND_CONFIG` | — | JSON backend config consumed by guild bootstrap. |

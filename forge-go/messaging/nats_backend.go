@@ -4,11 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,45 +13,11 @@ import (
 	"github.com/rustic-ai/forge/forge-go/protocol"
 )
 
-const defaultNATSMessageTTL = 3600 * time.Second
-
-// longRetentionTTL is used for topics that need extended message history (e.g. user notifications).
-const longRetentionTTL = 60 * 24 * time.Hour // 60 days
-
-// longRetentionTopics lists topic substrings that should use extended retention.
-var longRetentionTopics = []string{
-	"user_notifications:",
-	"user_message_broadcast",
-}
-
-// NATSConfig holds configuration for the NATS backend.
-type NATSConfig struct {
-	// MessageTTL controls retention for JetStream streams and KV buckets.
-	// Reads RUSTIC_AI_NATS_MSG_TTL env var (matching Python), defaults to 3600s.
-	MessageTTL time.Duration
-}
-
-// defaultNATSConfig builds configuration from environment variables.
-func defaultNATSConfig() NATSConfig {
-	ttl := defaultNATSMessageTTL
-
-	if val := os.Getenv("RUSTIC_AI_NATS_MSG_TTL"); val != "" {
-		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-			ttl = time.Duration(parsed) * time.Second
-		} else {
-			slog.Warn("Invalid RUSTIC_AI_NATS_MSG_TTL, falling back to default", "val", val, "default", defaultNATSMessageTTL.Seconds())
-		}
-	}
-
-	return NATSConfig{MessageTTL: ttl}
-}
-
 // NATSBackend implements Backend using NATS JetStream for durable storage and
 // core NATS pub/sub for live delivery, mirroring the Python NATSMessagingBackend.
 type NATSBackend struct {
 	nc        *nats.Conn
 	js        nats.JetStreamContext
-	config    NATSConfig
 	mu        sync.Mutex
 	streams   map[string]bool          // lazy cache of created streams
 	kvBuckets map[string]nats.KeyValue // lazy cache of KV buckets
@@ -63,13 +26,8 @@ type NATSBackend struct {
 // Compile-time check that NATSBackend satisfies the Backend interface.
 var _ Backend = (*NATSBackend)(nil)
 
-// NewNATSBackend creates a NATSBackend with default configuration.
+// NewNATSBackend creates a NATSBackend.
 func NewNATSBackend(nc *nats.Conn) (*NATSBackend, error) {
-	return NewNATSBackendWithConfig(nc, defaultNATSConfig())
-}
-
-// NewNATSBackendWithConfig creates a NATSBackend with explicit configuration.
-func NewNATSBackendWithConfig(nc *nats.Conn, config NATSConfig) (*NATSBackend, error) {
 	js, err := nc.JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("messaging: failed to obtain JetStream context: %w", err)
@@ -77,21 +35,9 @@ func NewNATSBackendWithConfig(nc *nats.Conn, config NATSConfig) (*NATSBackend, e
 	return &NATSBackend{
 		nc:        nc,
 		js:        js,
-		config:    config,
 		streams:   make(map[string]bool),
 		kvBuckets: make(map[string]nats.KeyValue),
 	}, nil
-}
-
-// ttlForTopic returns the appropriate TTL for a namespaced topic.
-// Topics matching longRetentionTopics get extended retention; all others use the default.
-func (b *NATSBackend) ttlForTopic(nsTopic string) time.Duration {
-	for _, pattern := range longRetentionTopics {
-		if strings.Contains(nsTopic, pattern) {
-			return longRetentionTTL
-		}
-	}
-	return b.config.MessageTTL
 }
 
 // ensureStream lazily creates (or verifies) the JetStream stream for a namespaced topic.
@@ -106,7 +52,7 @@ func (b *NATSBackend) ensureStream(nsTopic string) error {
 	cfg := &nats.StreamConfig{
 		Name:     streamName(nsTopic),
 		Subjects: []string{jsSubject(nsTopic)},
-		MaxAge:   b.ttlForTopic(nsTopic),
+		MaxAge:   0,
 	}
 
 	_, err := b.js.AddStream(cfg)
@@ -135,7 +81,7 @@ func (b *NATSBackend) ensureKV(namespace string) (nats.KeyValue, error) {
 	bucket := kvBucketName(namespace)
 	kv, err := b.js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: bucket,
-		TTL:    b.config.MessageTTL,
+		TTL:    0,
 	})
 	if err != nil {
 		// Bucket may already exist — try to bind.
