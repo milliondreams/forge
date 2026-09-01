@@ -1,11 +1,32 @@
 package api
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestStudioManagedDependencyProfileIsAccepted(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent-dependencies.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`llm:
+  class_name: example.Resolver
+  provided_type: example.LLM
+  catalog:
+    display_name: Local model
+    provider: local
+    managed_by: rustic-studio
+    capabilities: [chat]
+    aliases: [local]
+    selectable: true
+  properties: {}
+`), 0o600))
+
+	profiles, err := loadConfiguredDependencyProfiles(configPath)
+	require.NoError(t, err)
+	require.Equal(t, "rustic-studio", profiles["llm"].Catalog.ManagedBy)
+}
 
 const (
 	baseKVStoreType  = "rustic_ai.core.guild.agent_ext.depends.kvstore.base.BaseKVStore"

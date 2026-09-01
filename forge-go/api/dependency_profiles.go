@@ -16,6 +16,7 @@ type dependencyCatalogMetadata struct {
 	DisplayName  string   `yaml:"display_name"`
 	Description  string   `yaml:"description"`
 	Provider     string   `yaml:"provider"`
+	ManagedBy    string   `yaml:"managed_by"`
 	Capabilities []string `yaml:"capabilities"`
 	Aliases      []string `yaml:"aliases"`
 	Selectable   *bool    `yaml:"selectable"`
