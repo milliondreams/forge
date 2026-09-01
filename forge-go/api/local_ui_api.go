@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -15,14 +16,58 @@ import (
 )
 
 const (
-	localDummyUserID    = "dummyuserid"
-	localDummyOrgID     = "acmeorganizationid"
-	localUserIDEnvVar   = "FORGE_LOCAL_USER_ID"
-	localUserNameEnvVar = "FORGE_LOCAL_USER_NAME"
-	localAnonymousUser  = "Anonymous User"
+	localUserIDEnvVar           = "FORGE_LOCAL_USER_ID"
+	localUserNameEnvVar         = "FORGE_LOCAL_USER_NAME"
+	localOrganizationIDEnvVar   = "FORGE_LOCAL_ORGANIZATION_ID"
+	localOrganizationNameEnvVar = "FORGE_LOCAL_ORGANIZATION_NAME"
+	localAnonymousUser          = "Anonymous User"
+	localOrganizationName       = "Local"
 )
 
-var validLocalUserID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var validLocalIdentityID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+type localIdentity struct {
+	UserID           string
+	UserName         string
+	OrganizationID   string
+	OrganizationName string
+}
+
+func loadLocalIdentityFromEnvironment() (localIdentity, error) {
+	userID := strings.TrimSpace(os.Getenv(localUserIDEnvVar))
+	if !validLocalIdentityID.MatchString(userID) {
+		return localIdentity{}, fmt.Errorf(
+			"%s must match %s when FORGE_IDENTITY_MODE=local",
+			localUserIDEnvVar,
+			validLocalIdentityID.String(),
+		)
+	}
+
+	organizationID := strings.TrimSpace(os.Getenv(localOrganizationIDEnvVar))
+	if !validLocalIdentityID.MatchString(organizationID) {
+		return localIdentity{}, fmt.Errorf(
+			"%s must match %s when FORGE_IDENTITY_MODE=local",
+			localOrganizationIDEnvVar,
+			validLocalIdentityID.String(),
+		)
+	}
+
+	userName := strings.TrimSpace(os.Getenv(localUserNameEnvVar))
+	if userName == "" {
+		userName = localAnonymousUser
+	}
+	organizationName := strings.TrimSpace(os.Getenv(localOrganizationNameEnvVar))
+	if organizationName == "" {
+		organizationName = localOrganizationName
+	}
+
+	return localIdentity{
+		UserID:           userID,
+		UserName:         userName,
+		OrganizationID:   organizationID,
+		OrganizationName: organizationName,
+	}, nil
+}
 
 type localUserInfo struct {
 	ID       string `json:"id"`
@@ -103,38 +148,29 @@ type localUIState struct {
 	wsSessions map[string]wsBootstrapSession
 }
 
-func newLocalUIState() *localUIState {
-	userID := strings.TrimSpace(os.Getenv(localUserIDEnvVar))
-	if !validLocalUserID.MatchString(userID) {
-		userID = localDummyUserID
-	}
-	userName := strings.TrimSpace(os.Getenv(localUserNameEnvVar))
-	if userName == "" {
-		userName = localAnonymousUser
-	}
-
+func newLocalUIState(identity localIdentity) *localUIState {
 	return &localUIState{
 		user: localUserInfo{
-			ID:       userID,
-			FullName: userName,
+			ID:       identity.UserID,
+			FullName: identity.UserName,
 			Email:    "anonymous@example.com",
 		},
 		org: localOrganizationInfo{
-			ID:         localDummyOrgID,
-			Name:       "Acme",
+			ID:         identity.OrganizationID,
+			Name:       identity.OrganizationName,
 			IsDisabled: false,
 		},
 		orgD: localOrganizationDetail{
-			ID:         localDummyOrgID,
-			Name:       "Acme",
+			ID:         identity.OrganizationID,
+			Name:       identity.OrganizationName,
 			URL:        "http://localhost:3000",
 			CreatedAt:  time.Now().UnixMilli(),
 			UsersCount: 1,
 			IsDisabled: false,
 		},
 		userMembership: localOrganizationMembership{
-			ID:         localDummyOrgID,
-			Name:       "Acme",
+			ID:         identity.OrganizationID,
+			Name:       identity.OrganizationName,
 			URL:        "http://localhost:3000",
 			UserRoles:  []string{"member", "admin"},
 			IsDisabled: false,

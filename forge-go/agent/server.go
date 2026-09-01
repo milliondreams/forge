@@ -352,6 +352,9 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress).
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
 		WithModelFit("", cfg.DependencyConfig, nil)
+	if err := httpServer.ValidateConfiguration(); err != nil {
+		return err
+	}
 	if err := httpServer.WithSecureStores(secretProvider); err != nil {
 		return fmt.Errorf("initialize secure stores: %w", err)
 	}

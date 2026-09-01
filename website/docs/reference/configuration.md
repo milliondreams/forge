@@ -163,7 +163,11 @@ See [Messaging](../concepts/messaging-protocol/) for how these map onto Redis/NA
 | `FORGE_OAUTH_PROVIDERS_CONFIG` | `conf/oauth-providers.yaml` | Path to the OAuth providers YAML. |
 | `FORGE_KEYCHAIN_SERVICE` | `forge` | OS keychain service name used by both the keychain secret provider and the keychain token store. |
 | `FORGE_MANAGER_API_BASE_URL` | — | Externally reachable base URL used to build OAuth callback URLs. |
-| `FORGE_IDENTITY_MODE` | — | Identity mode for the manager surface. |
+| `FORGE_IDENTITY_MODE` | `local` | Identity mode for the manager surface. Local mode requires explicit local user and organization IDs. |
+| `FORGE_LOCAL_USER_ID` | — | Required safe user ID when `FORGE_IDENTITY_MODE=local`. |
+| `FORGE_LOCAL_USER_NAME` | `Anonymous User` | Display name for the local user. |
+| `FORGE_LOCAL_ORGANIZATION_ID` | — | Required safe organization ID when `FORGE_IDENTITY_MODE=local`. |
+| `FORGE_LOCAL_ORGANIZATION_NAME` | `Local` | Display name for the local organization. |
 | `FORGE_QUOTA_MODE` | — | Quota enforcement mode. |
 
 Full detail on the secret chain, OAuth PKCE flow, and keychain bridging is in [Secrets & OAuth](../features/secrets-oauth/).

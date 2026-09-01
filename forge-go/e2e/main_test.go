@@ -46,6 +46,10 @@ func TestMain(m *testing.M) {
 		_ = os.Setenv("TMPDIR", tmpDir)
 		_ = os.Setenv("FORGE_UV_CACHE_DIR", uvCache)
 		_ = os.Setenv("UV_CACHE_DIR", uvCache)
+		_ = os.Setenv("FORGE_LOCAL_USER_ID", "test-user")
+		_ = os.Setenv("FORGE_LOCAL_USER_NAME", "Test User")
+		_ = os.Setenv("FORGE_LOCAL_ORGANIZATION_ID", "test-org")
+		_ = os.Setenv("FORGE_LOCAL_ORGANIZATION_NAME", "Test Organization")
 
 		if _, lookErr := exec.LookPath("uvx"); lookErr != nil {
 			if ensureErr := registry.EnsureUV(); ensureErr != nil {

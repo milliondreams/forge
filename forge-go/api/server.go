@@ -24,21 +24,22 @@ import (
 )
 
 type Server struct {
-	store          store.Store
-	statusStore    supervisor.AgentStatusStore
-	controlPusher  protocol.ControlPusher
-	msgClient      messaging.Backend
-	infraPublisher *infraevents.Publisher
-	fileStore      *filesystem.LocalFileStore
-	localUI        *localUIState
-	observeService *observeService
-	modelFit       *modelFitService
-	oauthManager   *oauth.Manager
-	oauthTokens    *oauth.CachedTokenStore
-	oauthClients   *oauth.CachedClientCredentialsStore
-	secretManager  *secrets.Manager
-	listenAddr     string
-	server         *http.Server
+	store              store.Store
+	statusStore        supervisor.AgentStatusStore
+	controlPusher      protocol.ControlPusher
+	msgClient          messaging.Backend
+	infraPublisher     *infraevents.Publisher
+	fileStore          *filesystem.LocalFileStore
+	localUI            *localUIState
+	observeService     *observeService
+	modelFit           *modelFitService
+	oauthManager       *oauth.Manager
+	oauthTokens        *oauth.CachedTokenStore
+	oauthClients       *oauth.CachedClientCredentialsStore
+	secretManager      *secrets.Manager
+	configurationError error
+	listenAddr         string
+	server             *http.Server
 }
 
 func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlPusher protocol.ControlPusher, mc messaging.Backend, fs *filesystem.LocalFileStore, listenAddr string) *Server {
@@ -46,18 +47,29 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 	if mc != nil {
 		infraPublisher, _ = infraevents.NewPublisher(mc)
 	}
-	localUI := newLocalUIState()
+	identity, identityErr := loadLocalIdentityFromEnvironment()
+	localUI := newLocalUIState(identity)
 	s := &Server{
-		store:          db,
-		statusStore:    statusStore,
-		controlPusher:  controlPusher,
-		msgClient:      mc,
-		infraPublisher: infraPublisher,
-		fileStore:      fs,
-		localUI:        localUI,
-		listenAddr:     listenAddr,
+		store:              db,
+		statusStore:        statusStore,
+		controlPusher:      controlPusher,
+		msgClient:          mc,
+		infraPublisher:     infraPublisher,
+		fileStore:          fs,
+		localUI:            localUI,
+		configurationError: identityErr,
+		listenAddr:         listenAddr,
 	}
 	return s
+}
+
+// ValidateConfiguration rejects incomplete local identity configuration before
+// any HTTP listener or embedded client starts.
+func (s *Server) ValidateConfiguration() error {
+	if envString("FORGE_IDENTITY_MODE", "local") == "local" && s.configurationError != nil {
+		return fmt.Errorf("configure local identity: %w", s.configurationError)
+	}
+	return nil
 }
 
 // WithSecureStores initializes all managed credential persistence against the
@@ -110,11 +122,14 @@ func (s *Server) SecretManager() *secrets.Manager {
 // ReadyDependencyProfiles evaluates the embedded node against the value-free
 // local secret metadata index, avoiding keychain reads during registration.
 func (s *Server) ReadyDependencyProfiles(configPath string) ([]string, error) {
+	if err := s.ValidateConfiguration(); err != nil {
+		return nil, err
+	}
 	if s.secretManager == nil {
 		return nil, fmt.Errorf("secret manager is not configured")
 	}
 	return ReadyDependencyProfileKeys(configPath, func(name string) (bool, error) {
-		return s.secretManager.Exists(localDummyOrgID, name), nil
+		return s.secretManager.Exists(s.localUI.org.ID, name), nil
 	})
 }
 
@@ -138,6 +153,9 @@ func (s *Server) WithModelFit(catalogPath, dependencyConfigPath string, profiler
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.ValidateConfiguration(); err != nil {
+		return err
+	}
 	gin.SetMode(gin.ReleaseMode)
 	router := s.buildRouter()
 
