@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPusher, infraPublisher *infraevents.Publisher, spec *protocol.GuildSpec, orgID string, dependencyConfigPath string) (*store.GuildModel, error) {
+func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPusher, infraPublisher *infraevents.Publisher, spec *protocol.GuildSpec, orgID, createdBy, dependencyConfigPath string) (*store.GuildModel, error) {
 	applyDefaults(spec)
 
 	// Dependency files are installation catalogs. Only materialize profiles
@@ -33,7 +33,10 @@ func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPushe
 		return nil, fmt.Errorf("failed to normalize filesystem dependency: %w", err)
 	}
 
-	guildModel, agentModels := buildModels(spec, orgID)
+	guildModel, agentModels := buildModels(spec, orgID, createdBy)
+	if err := ValidateID(guildModel.ID); err != nil {
+		return nil, err
+	}
 	normalizeRuntimeSpecIDs(spec, guildModel.ID)
 	normalizeAgentModelIDs(agentModels, guildModel.ID)
 	applyStateManagerConfig(spec, orgID, guildModel.ID)
@@ -51,7 +54,7 @@ func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPushe
 		Message:         "guild metadata persisted",
 	})
 
-	if err := EnqueueGuildManagerSpawn(ctx, pusher, infraPublisher, spec, orgID); err != nil {
+	if err := EnqueueGuildManagerSpawn(ctx, pusher, infraPublisher, spec, orgID, createdBy); err != nil {
 		return nil, fmt.Errorf("failed to enqueue GMA spawn request: %w", err)
 	}
 
@@ -60,12 +63,15 @@ func Bootstrap(ctx context.Context, db store.Store, pusher protocol.ControlPushe
 	return guildModel, nil
 }
 
-func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher, infraPublisher *infraevents.Publisher, spec *protocol.GuildSpec, orgID string) error {
+func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher, infraPublisher *infraevents.Publisher, spec *protocol.GuildSpec, orgID, createdBy string) error {
 	if spec == nil {
 		return fmt.Errorf("guild spec is required")
 	}
 	if spec.ID == "" {
 		return fmt.Errorf("guild spec id is required")
+	}
+	if strings.TrimSpace(createdBy) == "" {
+		return fmt.Errorf("guild creator is required")
 	}
 	normalizeRuntimeSpecIDs(spec, spec.ID)
 
@@ -94,6 +100,7 @@ func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher
 				"guild_spec":           spec,
 				"manager_api_base_url": managerAPIBaseURL,
 				"organization_id":      orgID,
+				"created_by":           createdBy,
 				"manager_api_token":    managerAPIToken,
 			},
 		},
@@ -102,6 +109,7 @@ func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher
 			"guild_spec":           string(specBytes),
 			"manager_api_base_url": managerAPIBaseURL,
 			"organization_id":      orgID,
+			"created_by":           createdBy,
 		},
 	}
 
@@ -373,7 +381,7 @@ func stripDependencyCatalogMetadata(spec *protocol.GuildSpec) {
 	}
 }
 
-func buildModels(spec *protocol.GuildSpec, orgID string) (*store.GuildModel, []store.AgentModel) {
+func buildModels(spec *protocol.GuildSpec, orgID, createdBy string) (*store.GuildModel, []store.AgentModel) {
 	execEngine := "rustic_ai.core.guild.execution.sync.sync_exec_engine.SyncExecutionEngine"
 	if custom, ok := spec.Properties["execution_engine"].(string); ok {
 		execEngine = custom
@@ -393,6 +401,7 @@ func buildModels(spec *protocol.GuildSpec, orgID string) (*store.GuildModel, []s
 		Description:     spec.Description,
 		ExecutionEngine: execEngine,
 		OrganizationID:  orgID,
+		CreatedBy:       createdBy,
 		Properties:      store.JSONB(spec.Properties),
 		BackendConfig:   store.JSONB{},
 		DependencyMap:   dependencySpecsToJSONB(spec.DependencyMap),

@@ -135,6 +135,31 @@ func (r *RedisBackend) GetMessagesByID(ctx context.Context, namespace string, ms
 	return parsed, nil
 }
 
+// DeleteNamespace removes only durable keys owned by one guild namespace.
+// SCAN keeps the operation bounded and avoids blocking Redis on large stores.
+func (r *RedisBackend) DeleteNamespace(ctx context.Context, namespace string) error {
+	patterns := []string{"msg:" + namespace + ":*", namespace + ":*"}
+	for _, pattern := range patterns {
+		var cursor uint64
+		for {
+			keys, next, err := r.rdb.Scan(ctx, cursor, pattern, 256).Result()
+			if err != nil {
+				return fmt.Errorf("scan messaging namespace: %w", err)
+			}
+			if len(keys) > 0 {
+				if err := r.rdb.Del(ctx, keys...).Err(); err != nil {
+					return fmt.Errorf("delete messaging namespace keys: %w", err)
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // parseAndSortMessages is a package-level helper used by both Redis and NATS backends.
 func parseAndSortMessages(raw []string) ([]protocol.Message, error) {
 	var messages []protocol.Message

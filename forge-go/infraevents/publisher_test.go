@@ -45,6 +45,8 @@ func (r *recordingBackend) Subscribe(_ context.Context, _ string, _ ...string) (
 	return nil, nil
 }
 
+func (r *recordingBackend) DeleteNamespace(_ context.Context, _ string) error { return nil }
+
 func (r *recordingBackend) Close() error { return nil }
 
 func TestPublisherEmitPublishesCanonicalInfraEvent(t *testing.T) {

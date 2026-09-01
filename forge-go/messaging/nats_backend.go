@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,6 +134,44 @@ func (b *NATSBackend) PublishMessage(_ context.Context, namespace, topic string,
 		return fmt.Errorf("failed to publish message %d to core pub/sub topic %q: %w", msg.ID, nsTopic, err)
 	}
 
+	return nil
+}
+
+// DeleteNamespace removes the exact JetStream streams and message-ID bucket
+// owned by a guild. It discovers server state rather than relying on process
+// caches so deletion remains correct after a Forge restart.
+func (b *NATSBackend) DeleteNamespace(_ context.Context, namespace string) error {
+	prefix := jsSubject(namespace + ":")
+	for info := range b.js.StreamsInfo() {
+		if info == nil {
+			continue
+		}
+		owned := false
+		for _, subject := range info.Config.Subjects {
+			if strings.HasPrefix(subject, prefix) {
+				owned = true
+				break
+			}
+		}
+		if owned {
+			if err := b.js.DeleteStream(info.Config.Name); err != nil && err != nats.ErrStreamNotFound {
+				return fmt.Errorf("delete namespace stream %q: %w", info.Config.Name, err)
+			}
+		}
+	}
+	bucket := kvBucketName(namespace)
+	if err := b.js.DeleteKeyValue(bucket); err != nil && err != nats.ErrBucketNotFound {
+		return fmt.Errorf("delete namespace key-value bucket %q: %w", bucket, err)
+	}
+
+	b.mu.Lock()
+	for nsTopic := range b.streams {
+		if strings.HasPrefix(nsTopic, namespace+":") {
+			delete(b.streams, nsTopic)
+		}
+	}
+	delete(b.kvBuckets, namespace)
+	b.mu.Unlock()
 	return nil
 }
 

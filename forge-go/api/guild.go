@@ -22,6 +22,7 @@ import (
 type CreateGuildRequest struct {
 	Spec           *protocol.GuildSpec `json:"spec"`
 	OrganizationID string              `json:"org_id"`
+	UserID         string              `json:"user_id"`
 }
 
 func dependencyConfigPath() string {
@@ -39,9 +40,15 @@ func (s *Server) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Spec == nil || req.OrganizationID == "" {
-		ReplyError(w, http.StatusUnprocessableEntity, "spec and organization_id are required")
+	if req.Spec == nil || req.OrganizationID == "" || req.UserID == "" {
+		ReplyError(w, http.StatusUnprocessableEntity, "spec, organization_id, and user_id are required")
 		return
+	}
+	if strings.TrimSpace(req.Spec.ID) != "" {
+		if err := guild.ValidateID(req.Spec.ID); err != nil {
+			ReplyError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 	}
 
 	_ = s.infraPublisher.Emit(r.Context(), infraevents.EmitParams{
@@ -53,7 +60,7 @@ func (s *Server) HandleCreateGuild(w http.ResponseWriter, r *http.Request) {
 		Message:         "guild launch requested",
 	})
 
-	model, err := guild.Bootstrap(r.Context(), s.store, s.controlPusher, s.infraPublisher, req.Spec, req.OrganizationID, dependencyConfigPath())
+	model, err := guild.Bootstrap(r.Context(), s.store, s.controlPusher, s.infraPublisher, req.Spec, req.OrganizationID, req.UserID, dependencyConfigPath())
 	if err != nil {
 		ReplyError(w, http.StatusInternalServerError, "failed to bootstrap guild: "+err.Error())
 		return
@@ -95,7 +102,7 @@ func (s *Server) HandleRelaunchGuild(w http.ResponseWriter, r *http.Request) {
 		}
 
 		spec := store.ToGuildSpec(guildModel)
-		if err := guild.EnqueueGuildManagerSpawn(r.Context(), s.controlPusher, s.infraPublisher, spec, guildModel.OrganizationID); err != nil {
+		if err := guild.EnqueueGuildManagerSpawn(r.Context(), s.controlPusher, s.infraPublisher, spec, guildModel.OrganizationID, guildModel.CreatedBy); err != nil {
 			ReplyError(w, http.StatusInternalServerError, "failed to enqueue relaunch")
 			return
 		}
@@ -199,7 +206,8 @@ func (s *Server) HandleGetHistoricalMessages(w http.ResponseWriter, r *http.Requ
 
 type GuildSpecResponse struct {
 	*protocol.GuildSpec
-	Status store.GuildStatus `json:"status"`
+	Status    store.GuildStatus `json:"status"`
+	CreatedBy string            `json:"created_by"`
 }
 
 func (s *Server) HandleGetGuild(w http.ResponseWriter, r *http.Request) {
@@ -219,5 +227,6 @@ func (s *Server) HandleGetGuild(w http.ResponseWriter, r *http.Request) {
 	ReplyJSON(w, http.StatusOK, GuildSpecResponse{
 		GuildSpec: spec,
 		Status:    model.Status,
+		CreatedBy: model.CreatedBy,
 	})
 }

@@ -67,7 +67,8 @@ func TestStartServer_EnrichesMessagingConfigForNodeDispatch(t *testing.T) {
 	registerDistributedTestEchoAgent(t, cfg.DatabaseURL)
 
 	guildReq := map[string]interface{}{
-		"org_id": "org-1",
+		"org_id":  "org-1",
+		"user_id": "user-1",
 		"spec": map[string]interface{}{
 			"id":          "guild-dispatch",
 			"name":        "guild-dispatch",
@@ -224,7 +225,8 @@ func TestStartServer_AcceptedSpawnSurvivesUntilNodeAvailable(t *testing.T) {
 	registerDistributedTestEchoAgent(t, cfg.DatabaseURL)
 
 	guildReq := map[string]interface{}{
-		"org_id": "org-1",
+		"org_id":  "org-1",
+		"user_id": "user-1",
 		"spec": map[string]interface{}{
 			"id":          "guild-accepted",
 			"name":        "guild-accepted",

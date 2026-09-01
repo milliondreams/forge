@@ -13,6 +13,7 @@ type Backend interface {
 	GetMessagesSince(ctx context.Context, namespace, topic string, sinceID uint64) ([]protocol.Message, error)
 	GetMessagesByID(ctx context.Context, namespace string, msgIDs []uint64) ([]protocol.Message, error)
 	Subscribe(ctx context.Context, namespace string, topics ...string) (Subscription, error)
+	DeleteNamespace(ctx context.Context, namespace string) error
 	Close() error
 }
 

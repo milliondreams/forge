@@ -38,7 +38,7 @@ func TestDSL_Lifecycle_ParseBuildValidateStoreRoundTrip(t *testing.T) {
 				t.Fatalf("validate built dsl: %v", err)
 			}
 
-			model := store.FromGuildSpec(built, "org-dsl")
+			model := store.FromGuildSpec(built, "org-dsl", "user-dsl")
 			if err := db.CreateGuild(model); err != nil {
 				t.Fatalf("persist built spec: %v", err)
 			}

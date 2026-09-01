@@ -86,6 +86,32 @@ func TestNATSPublishAndRetrieveMessages(t *testing.T) {
 	assert.Equal(t, msg2.ID, byID[1].ID)
 }
 
+func TestNATSDeleteNamespaceSurvivesBackendRestartAndKeepsSibling(t *testing.T) {
+	s := startInProcessNATSServer(t)
+	nc, err := nats.Connect(s.ClientURL())
+	require.NoError(t, err)
+	defer func() { _ = nc.Drain() }()
+	first, err := messaging.NewNATSBackend(nc)
+	require.NoError(t, err)
+	gen, err := protocol.NewGemstoneGenerator(1)
+	require.NoError(t, err)
+	for _, namespace := range []string{"guild-a", "guild-a2"} {
+		id, genErr := gen.Generate(protocol.PriorityNormal)
+		require.NoError(t, genErr)
+		require.NoError(t, first.PublishMessage(context.Background(), namespace, "topic", &protocol.Message{ID: id.ToInt()}))
+	}
+
+	restarted, err := messaging.NewNATSBackend(nc)
+	require.NoError(t, err)
+	require.NoError(t, restarted.DeleteNamespace(context.Background(), "guild-a"))
+	deleted, err := restarted.GetMessagesForTopic(context.Background(), "guild-a", "topic")
+	require.NoError(t, err)
+	require.Empty(t, deleted)
+	sibling, err := restarted.GetMessagesForTopic(context.Background(), "guild-a2", "topic")
+	require.NoError(t, err)
+	require.Len(t, sibling, 1)
+}
+
 func TestNATSDurableMessageStorageHasNoExpiry(t *testing.T) {
 	t.Setenv("RUSTIC_AI_NATS_MSG_TTL", "1")
 	s := startInProcessNATSServer(t)

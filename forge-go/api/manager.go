@@ -70,12 +70,16 @@ func (s *Server) HandleManagerEnsureGuild(w http.ResponseWriter, r *http.Request
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if req.GuildSpec == nil || strings.TrimSpace(req.OrganizationID) == "" {
-		ReplyError(w, http.StatusUnprocessableEntity, "guild_spec and organization_id are required")
+	if req.GuildSpec == nil || strings.TrimSpace(req.OrganizationID) == "" || strings.TrimSpace(req.CreatedBy) == "" {
+		ReplyError(w, http.StatusUnprocessableEntity, "guild_spec, organization_id, and created_by are required")
 		return
 	}
 	if strings.TrimSpace(req.GuildSpec.ID) == "" {
 		ReplyError(w, http.StatusUnprocessableEntity, "guild_spec.id is required")
+		return
+	}
+	if err := guild.ValidateID(req.GuildSpec.ID); err != nil {
+		ReplyError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
@@ -110,7 +114,7 @@ func (s *Server) HandleManagerEnsureGuild(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	guildModel := store.FromGuildSpec(spec, req.OrganizationID)
+	guildModel := store.FromGuildSpec(spec, req.OrganizationID, req.CreatedBy)
 	guildModel.Status = store.GuildStatusPendingLaunch
 	agents := append([]store.AgentModel{}, guildModel.Agents...)
 	guildModel.Agents = nil
@@ -151,6 +155,7 @@ func (s *Server) HandleManagerGetGuildSpec(w http.ResponseWriter, r *http.Reques
 	ReplyJSON(w, http.StatusOK, GuildSpecWithStatusResponse{
 		GuildSpec: store.ToGuildSpec(model),
 		Status:    model.Status,
+		CreatedBy: model.CreatedBy,
 	})
 }
 

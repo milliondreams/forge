@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,7 @@ type Server struct {
 	credentialRegistry *registry.Registry
 	launchPreflights   *launchPreflightCache
 	configurationError error
+	dataDir            string
 	listenAddr         string
 	server             *http.Server
 }
@@ -61,7 +63,18 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 		fileStore:          fs,
 		localUI:            localUI,
 		configurationError: identityErr,
+		dataDir:            forgepath.Resolve("data"),
 		listenAddr:         listenAddr,
+	}
+	return s
+}
+
+// WithDataDir records the configured Forge data root used by embedded agent
+// supervisors. Guild deletion uses the same root to remove Forge-owned agent
+// runtime directories after workloads have stopped.
+func (s *Server) WithDataDir(dataDir string) *Server {
+	if value := strings.TrimSpace(dataDir); value != "" {
+		s.dataDir = filepath.Clean(value)
 	}
 	return s
 }

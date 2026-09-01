@@ -364,9 +364,34 @@ func (s *gormStore) DeleteGuild(id string) error {
 }
 
 func (s *gormStore) PurgeGuild(guild *GuildModel) error {
-	s.db.Unscoped().Where("guild_id = ?", guild.ID).Delete(&AgentModel{})
-	s.db.Unscoped().Where("guild_id = ?", guild.ID).Delete(&GuildRoutes{})
-	return s.db.Unscoped().Delete(guild).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var boards []Board
+		if err := tx.Where("guild_id = ?", guild.ID).Find(&boards).Error; err != nil {
+			return err
+		}
+		for _, board := range boards {
+			if err := tx.Unscoped().Where("board_id = ?", board.ID).Delete(&BoardMessage{}).Error; err != nil {
+				return err
+			}
+		}
+		deletions := []struct {
+			query any
+			where string
+		}{
+			{&Board{}, "guild_id = ?"},
+			{&UserGuild{}, "guild_id = ?"},
+			{&BlueprintGuild{}, "guild_id = ?"},
+			{&GuildRelaunchModel{}, "guild_id = ?"},
+			{&GuildRoutes{}, "guild_id = ?"},
+			{&AgentModel{}, "guild_id = ?"},
+		}
+		for _, deletion := range deletions {
+			if err := tx.Unscoped().Where(deletion.where, guild.ID).Delete(deletion.query).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Unscoped().Where("id = ?", guild.ID).Delete(&GuildModel{}).Error
+	})
 }
 
 func (s *gormStore) CreateGuildRelaunch(entry *GuildRelaunchModel) error {

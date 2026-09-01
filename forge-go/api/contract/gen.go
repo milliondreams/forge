@@ -568,6 +568,7 @@ type BaseAgentProps = map[string]interface{}
 // BasicGuildInfo defines model for BasicGuildInfo.
 type BasicGuildInfo struct {
 	BlueprintId *string `json:"blueprint_id,omitempty"`
+	CreatedBy   string  `json:"created_by"`
 	Icon        *string `json:"icon,omitempty"`
 	Id          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -844,6 +845,7 @@ type GuildSpec struct {
 // GuildSpecResponse Response for a guild specification that describes its name, description, agents, routes, and status.
 type GuildSpecResponse struct {
 	Agents        *[]AgentSpecOutput         `json:"agents,omitempty"`
+	CreatedBy     string                     `json:"created_by"`
 	DependencyMap *map[string]DependencySpec `json:"dependency_map,omitempty"`
 	Description   string                     `json:"description"`
 	Gateway       *GatewayConfig             `json:"gateway,omitempty"`
@@ -947,7 +949,8 @@ type LaunchGuildReq struct {
 	//     dependency_map (Dict[str, DependencySpec]): A mapping for guild's dependency to resolver class.
 	//     routes (RoutingSlip): The routes to be attached to every message coming in the guild.
 	//     gateway (Optional[GatewayConfig]): Configuration for the automatic GatewayAgent.
-	Spec GuildSpec `json:"spec"`
+	Spec   GuildSpec `json:"spec"`
+	UserId string    `json:"user_id"`
 }
 
 // LaunchOAuthActionRequest defines model for LaunchOAuthActionRequest.
@@ -1519,6 +1522,13 @@ type AddMessageToBoardParams struct {
 // RemoveMessageFromBoardParams defines parameters for RemoveMessageFromBoard.
 type RemoveMessageFromBoardParams struct {
 	Sqldb *string `form:"sqldb,omitempty" json:"sqldb,omitempty"`
+}
+
+// DeleteGuildParams defines parameters for DeleteGuild.
+type DeleteGuildParams struct {
+	UserId string `form:"user_id" json:"user_id"`
+	OrgId  string `form:"org_id" json:"org_id"`
+	Force  *bool  `form:"force,omitempty" json:"force,omitempty"`
 }
 
 // GetGuildDetailsByIdParams defines parameters for GetGuildDetailsById.
@@ -2552,6 +2562,9 @@ type ServerInterface interface {
 	// CreateGuild Create Guild
 	// (POST /api/guilds)
 	CreateGuild(c *gin.Context)
+	// DeleteGuild Permanently delete a quiescent guild
+	// (DELETE /api/guilds/{guild_id})
+	DeleteGuild(c *gin.Context, guildId string, params DeleteGuildParams)
 	// GetGuildDetailsById Get Guild
 	// (GET /api/guilds/{guild_id})
 	GetGuildDetailsById(c *gin.Context, guildId string, params GetGuildDetailsByIdParams)
@@ -2973,6 +2986,58 @@ func (siw *ServerInterfaceWrapper) CreateGuild(c *gin.Context) {
 	}
 
 	siw.Handler.CreateGuild(c)
+}
+
+// DeleteGuild operation middleware
+func (siw *ServerInterfaceWrapper) DeleteGuild(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "guild_id" -------------
+	var guildId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "guild_id", c.Param("guild_id"), &guildId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter guild_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteGuildParams
+
+	// ------------- Required query parameter "user_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "user_id", c.Request.URL.Query(), &params.UserId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter user_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "org_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "org_id", c.Request.URL.Query(), &params.OrgId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter org_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "force" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "force", c.Request.URL.Query(), &params.Force, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter force: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteGuild(c, guildId, params)
 }
 
 // GetGuildDetailsById operation middleware
@@ -5363,6 +5428,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/addons/boards/:board_id/messages", wrapper.AddMessageToBoard)
 	router.DELETE(options.BaseURL+"/addons/boards/:board_id/messages/:message_id", wrapper.RemoveMessageFromBoard)
 	router.POST(options.BaseURL+"/api/guilds", wrapper.CreateGuild)
+	router.DELETE(options.BaseURL+"/api/guilds/:guild_id", wrapper.DeleteGuild)
 	router.GET(options.BaseURL+"/api/guilds/:guild_id", wrapper.GetGuildDetailsById)
 	router.GET(options.BaseURL+"/api/guilds/:guild_id/agents/:agent_id/files/", wrapper.ListFilesForAgent)
 	router.POST(options.BaseURL+"/api/guilds/:guild_id/agents/:agent_id/files/", wrapper.UploadFileForAgent)

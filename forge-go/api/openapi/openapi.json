@@ -486,6 +486,10 @@
       },
       "BasicGuildInfo": {
         "properties": {
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
           "blueprint_id": {
             "anyOf": [
               {
@@ -522,6 +526,7 @@
           }
         },
         "required": [
+          "created_by",
           "id",
           "name",
           "status"
@@ -1556,6 +1561,10 @@
       "GuildSpecResponse": {
         "description": "Response for a guild specification that describes its name, description, agents, routes, and status.",
         "properties": {
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
           "agents": {
             "default": [],
             "items": {
@@ -1611,6 +1620,7 @@
           }
         },
         "required": [
+          "created_by",
           "name",
           "description",
           "status"
@@ -1924,11 +1934,16 @@
           },
           "spec": {
             "$ref": "#/components/schemas/GuildSpec"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
           }
         },
         "required": [
           "spec",
-          "org_id"
+          "org_id",
+          "user_id"
         ],
         "title": "LaunchGuildReq",
         "type": "object"
@@ -3842,6 +3857,23 @@
       }
     },
     "/api/guilds/{guild_id}": {
+      "delete": {
+        "operationId": "deleteGuild",
+        "summary": "Permanently delete a quiescent guild",
+        "parameters": [
+          {"in": "path", "name": "guild_id", "required": true, "schema": {"type": "string"}},
+          {"in": "query", "name": "user_id", "required": true, "schema": {"type": "string"}},
+          {"in": "query", "name": "org_id", "required": true, "schema": {"type": "string"}},
+          {"in": "query", "name": "force", "required": false, "schema": {"type": "boolean", "default": false}}
+        ],
+        "responses": {
+          "204": {"description": "Guild deleted or already absent"},
+          "403": {"description": "Only the guild creator may delete it"},
+          "409": {"description": "Guild runtime is not quiescent"},
+          "422": {"description": "Invalid request"},
+          "501": {"description": "Hosted deletion requires authenticated identity"}
+        }
+      },
       "get": {
         "description": "Retrieves details for a guild based on the provided guild_id.\n\nArgs:\n    guild_id (str): The ID of the guild to retrieve details for.\n\nReturns:\n    GuildSpecResponse: The retrieved guild details, or None if the guild was not found.\n\nRaises:\n    HTTPException: If the guild is not found, raises an HTTPException with a status code of 404.",
         "operationId": "getGuildDetailsById",

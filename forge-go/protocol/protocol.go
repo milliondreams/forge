@@ -96,3 +96,20 @@ func PushSpawnRequest(ctx context.Context, pusher ControlPusher, req SpawnReques
 
 	return nil
 }
+
+// PushStopRequest routes an owned workload stop through Forge's existing
+// control plane and supervisor path.
+func PushStopRequest(ctx context.Context, pusher ControlPusher, req StopRequest) error {
+	wrapper := map[string]interface{}{"command": "stop", "payload": req}
+	data, err := json.Marshal(wrapper)
+	if err != nil {
+		return fmt.Errorf("serialize stop request wrapper: %w", err)
+	}
+	const queueName = "forge:control:requests"
+	if err := pusher.Push(ctx, queueName, data); err != nil {
+		telemetry.AddQueueProcessingError(queueName, "stop", "push_failed")
+		return fmt.Errorf("push to %s: %w", queueName, err)
+	}
+	telemetry.AddQueuePublish(queueName, "stop")
+	return nil
+}

@@ -371,6 +371,7 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	fileStore := filesystem.NewLocalFileStore(resolver)
 
 	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress).
+		WithDataDir(fsRoot).
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
 		WithModelFit("", cfg.DependencyConfig, nil)
 	if err := httpServer.ValidateConfiguration(); err != nil {

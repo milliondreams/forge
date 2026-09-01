@@ -55,7 +55,7 @@ def test_manager_client_ensure_and_heartbeat_roundtrip():
     metastore = ManagerMetastoreClient("http://forge.test", token="tkn", client=client)
 
     spec = GuildSpec(id="g-1", name="Guild", description="desc")
-    ensure_resp = metastore.ensure_guild(spec, "org-1")
+    ensure_resp = metastore.ensure_guild(spec, "org-1", "user-1")
     assert ensure_resp["status"] == "not_launched"
 
     heartbeat_resp = metastore.process_heartbeat(

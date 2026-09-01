@@ -1242,6 +1242,10 @@ func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 			ReplyError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
+		if err := guild.ValidateID(guildSpec.ID); err != nil {
+			ReplyError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 		current, err := server.evaluateRequirements(guildSpec, req.OrgID)
 		if err != nil {
 			ReplyError(w, http.StatusInternalServerError, "failed to check launch requirements: "+err.Error())
@@ -1255,13 +1259,13 @@ func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 
 		var model *store.GuildModel
 		if server.controlPusher != nil {
-			model, err = guild.Bootstrap(r.Context(), server.store, server.controlPusher, nil, guildSpec, req.OrgID, dependencyConfigPath())
+			model, err = guild.Bootstrap(r.Context(), server.store, server.controlPusher, nil, guildSpec, req.OrgID, req.UserID, dependencyConfigPath())
 			if err != nil {
 				ReplyError(w, http.StatusInternalServerError, "failed to create guild: "+err.Error())
 				return
 			}
 		} else {
-			model = store.FromGuildSpec(guildSpec, req.OrgID)
+			model = store.FromGuildSpec(guildSpec, req.OrgID, req.UserID)
 			if err := server.store.CreateGuild(model); err != nil {
 				ReplyError(w, http.StatusInternalServerError, "failed to create guild: "+err.Error())
 				return
@@ -1352,10 +1356,11 @@ func buildGuildListWithBlueprints(s store.Store, guilds []store.GuildModel) []ma
 	resp := make([]map[string]interface{}, 0, len(guilds))
 	for _, g := range guilds {
 		entry := map[string]interface{}{
-			"id":     g.ID,
-			"name":   g.Name,
-			"icon":   nil,
-			"status": g.Status,
+			"id":         g.ID,
+			"name":       g.Name,
+			"icon":       nil,
+			"status":     g.Status,
+			"created_by": g.CreatedBy,
 		}
 		if bp, err := s.GetBlueprintForGuild(g.ID); err == nil {
 			entry["blueprint_id"] = bp.ID

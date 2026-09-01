@@ -111,6 +111,8 @@ func (r *recordingInfraBackend) Subscribe(_ context.Context, _ string, _ ...stri
 	return nil, nil
 }
 
+func (r *recordingInfraBackend) DeleteNamespace(_ context.Context, _ string) error { return nil }
+
 func (r *recordingInfraBackend) Close() error { return nil }
 
 func loadProcessEventKinds(t *testing.T, backend *recordingInfraBackend, guildID string) []string {

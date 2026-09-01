@@ -55,7 +55,7 @@ func TestHandler_Integration(t *testing.T) {
 		Agents:      []protocol.AgentSpec{},
 		Properties:  make(map[string]interface{}),
 	}
-	gmodel := store.FromGuildSpec(spec, "test-org")
+	gmodel := store.FromGuildSpec(spec, "test-org", "test-user")
 	err = dbStore.CreateGuild(gmodel)
 	require.NoError(t, err)
 

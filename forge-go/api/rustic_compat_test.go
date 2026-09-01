@@ -135,6 +135,7 @@ func TestRusticFileRoutes_ProxyStyleRewrite(t *testing.T) {
 			Properties:  map[string]any{},
 		},
 		OrganizationID: "org-1",
+		UserID:         "user-1",
 	}
 	createBody, err := json.Marshal(createReq)
 	require.NoError(t, err)

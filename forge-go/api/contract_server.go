@@ -22,7 +22,7 @@ func (s *Server) HealthCheckHealthGet(c *gin.Context) {
 }
 
 func (s *Server) GetForgeCapabilities(c *gin.Context) {
-	s.dispatch(c, handleGetRusticCapabilities(), nil)
+	s.dispatch(c, s.handleGetRusticCapabilities(), nil)
 }
 
 func (s *Server) PreflightGuildFromBlueprint(c *gin.Context, blueprintID string) {
@@ -95,6 +95,10 @@ func (s *Server) CreateGuild(c *gin.Context) {
 
 func (s *Server) GetGuildDetailsById(c *gin.Context, guildID string, _ contract.GetGuildDetailsByIdParams) {
 	s.dispatch(c, s.HandleGetGuild, map[string]string{"id": guildID})
+}
+
+func (s *Server) DeleteGuild(c *gin.Context, guildID string, _ contract.DeleteGuildParams) {
+	s.dispatch(c, s.HandleDeleteGuild, map[string]string{"id": guildID})
 }
 
 func (s *Server) ListFilesForAgent(c *gin.Context, guildID, agentID string, _ contract.ListFilesForAgentParams) {

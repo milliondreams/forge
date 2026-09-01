@@ -87,7 +87,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		model := guildstore.FromGuildSpec(builtSpec, "test-org-123")
+		model := guildstore.FromGuildSpec(builtSpec, "test-org-123", "test-user-123")
 
 		if err := s.CreateGuild(model); err != nil {
 			fmt.Fprintf(os.Stderr, "Error saving to store: %v\n", err)

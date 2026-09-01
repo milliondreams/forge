@@ -47,11 +47,12 @@ class ManagerMetastoreClient:
         self.close()
 
     def ensure_guild(
-        self, guild_spec: GuildSpec, organization_id: str
+        self, guild_spec: GuildSpec, organization_id: str, created_by: str
     ) -> dict[str, Any]:
         payload = {
             "guild_spec": guild_spec.model_dump(mode="json", exclude_none=True),
             "organization_id": organization_id,
+            "created_by": created_by,
         }
         return self._request("POST", "/manager/guilds/ensure", json=payload)
 

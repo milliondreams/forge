@@ -115,6 +115,7 @@ func TestHandleCreateGuild(t *testing.T) {
 			},
 		},
 		OrganizationID: "org-123",
+		UserID:         "user-123",
 	}
 
 	body, err := json.Marshal(reqPayload)
@@ -163,7 +164,7 @@ func TestHandleGetGuild(t *testing.T) {
 		},
 		Properties: make(map[string]interface{}),
 	}
-	model := store.FromGuildSpec(spec, "org-456")
+	model := store.FromGuildSpec(spec, "org-456", "user-456")
 	model.ID = "test-get-guild"
 	model.Status = store.GuildStatus("running")
 	err := dbStore.CreateGuild(model)
@@ -195,6 +196,7 @@ func TestHandleRelaunchGuild_EnqueuesWhenManagerNotRunning(t *testing.T) {
 		Name:           "Relaunch Guild",
 		Description:    "test",
 		OrganizationID: "org-1",
+		CreatedBy:      "user-1",
 		BackendConfig:  store.JSONB{},
 		DependencyMap:  store.JSONB{},
 		Status:         store.GuildStatusRequested,
@@ -247,6 +249,7 @@ func TestHandleRelaunchGuild_NoOpWhenManagerRunning(t *testing.T) {
 		Name:           "Relaunch Guild",
 		Description:    "test",
 		OrganizationID: "org-1",
+		CreatedBy:      "user-1",
 		BackendConfig:  store.JSONB{},
 		DependencyMap:  store.JSONB{},
 		Status:         store.GuildStatusRequested,

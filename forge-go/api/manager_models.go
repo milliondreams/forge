@@ -8,6 +8,7 @@ import (
 type EnsureGuildRequest struct {
 	GuildSpec      *protocol.GuildSpec `json:"guild_spec"`
 	OrganizationID string              `json:"organization_id"`
+	CreatedBy      string              `json:"created_by"`
 }
 
 type EnsureGuildResponse struct {
@@ -19,6 +20,7 @@ type EnsureGuildResponse struct {
 type GuildSpecWithStatusResponse struct {
 	GuildSpec *protocol.GuildSpec `json:"guild_spec"`
 	Status    store.GuildStatus   `json:"status"`
+	CreatedBy string              `json:"created_by"`
 }
 
 type UpdateGuildStatusRequest struct {
