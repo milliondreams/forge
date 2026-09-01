@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -12,30 +13,38 @@ import (
 	gopsprocess "github.com/shirou/gopsutil/v4/process"
 )
 
+const (
+	processTerminationGracePeriod = 5 * time.Second
+	processTerminationKillWait    = 2 * time.Second
+	processTerminationPollPeriod  = 100 * time.Millisecond
+)
+
 func configureCommandForProcessGroup(cmd *exec.Cmd, detach bool) {
 	if detach {
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				return cmd.Process.Kill()
-			}
-			return nil
-		}
 		return
 	}
 
 	cmd.SysProcAttr = nil
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return terminateAttachedProcessTree(cmd.Process.Pid)
-		}
-		return nil
-	}
 }
 
-func terminateProcessTree(pid int, detach bool) error {
+func processGroupID(_ int) int {
+	return 0
+}
+
+func terminateProcessTree(pid, _ int, detach bool) error {
+	return terminateProcessTreeWithTimeout(
+		pid,
+		0,
+		detach,
+		processTerminationGracePeriod,
+		processTerminationKillWait,
+	)
+}
+
+func terminateProcessTreeWithTimeout(pid, _ int, detach bool, gracePeriod, killWait time.Duration) error {
 	if !detach {
-		return terminateAttachedProcessTree(pid)
+		return terminateAttachedProcessTreeWithTimeout(pid, gracePeriod, killWait)
 	}
 
 	proc, err := os.FindProcess(pid)
@@ -46,44 +55,41 @@ func terminateProcessTree(pid int, detach bool) error {
 	// Try a graceful interrupt first.
 	_ = proc.Signal(os.Interrupt)
 
-	for i := 0; i < 50; i++ {
-		alive, err := gopsprocess.PidExists(int32(pid))
-		if err != nil || !alive {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if waitForWindowsPIDsExit([]int{pid}, gracePeriod) {
+		return nil
 	}
 
 	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 
-	return nil
+	if waitForWindowsPIDsExit([]int{pid}, killWait) {
+		return nil
+	}
+	return fmt.Errorf("process %d remained alive after forced shutdown", pid)
 }
 
 func terminateAttachedProcessTree(pid int) error {
+	return terminateAttachedProcessTreeWithTimeout(
+		pid,
+		processTerminationGracePeriod,
+		processTerminationKillWait,
+	)
+}
+
+func terminateAttachedProcessTreeWithTimeout(pid int, gracePeriod, killWait time.Duration) error {
 	descendants := descendantPIDs(pid)
-	for _, childPID := range descendants {
+	processes := append(append([]int{}, descendants...), pid)
+	for _, childPID := range processes {
 		if proc, err := os.FindProcess(childPID); err == nil {
 			_ = proc.Signal(os.Interrupt)
 		}
 	}
-
-	proc, err := os.FindProcess(pid)
-	if err != nil {
+	if waitForWindowsPIDsExit(processes, gracePeriod) {
 		return nil
 	}
-	_ = proc.Signal(os.Interrupt)
 
-	for i := 0; i < 50; i++ {
-		alive, err := gopsprocess.PidExists(int32(pid))
-		if err != nil || !alive {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	for _, childPID := range descendants {
+	for _, childPID := range processes {
 		alive, err := gopsprocess.PidExists(int32(childPID))
 		if err == nil && alive {
 			if childProc, findErr := os.FindProcess(childPID); findErr == nil {
@@ -92,11 +98,30 @@ func terminateAttachedProcessTree(pid int) error {
 		}
 	}
 
-	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
+	if waitForWindowsPIDsExit(processes, killWait) {
+		return nil
 	}
+	return fmt.Errorf("attached process tree for pid %d remained alive after forced shutdown", pid)
+}
 
-	return nil
+func waitForWindowsPIDsExit(pids []int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		alive := false
+		for _, pid := range pids {
+			if processExists(pid) {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(processTerminationPollPeriod)
+	}
 }
 
 func processExists(pid int) bool {

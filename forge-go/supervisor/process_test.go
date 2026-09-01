@@ -55,6 +55,28 @@ func getChildTreeCmd() []string {
 	return []string{"sh", "-c", `sleep 30 & echo $! > child.pid; wait`}
 }
 
+func getStubbornChildTreeCmd() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/C", "ping -n 30 127.0.0.1 >NUL"}
+	}
+	return []string{
+		"sh",
+		"-c",
+		`(trap '' TERM; while :; do sleep 1; done) & echo $! > child.pid; wait`,
+	}
+}
+
+func getGracefulTerminationCmd() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/C", "ping -n 30 127.0.0.1 >NUL"}
+	}
+	return []string{
+		"sh",
+		"-c",
+		`trap 'echo terminated > term.txt; exit 0' TERM; touch ready.txt; while :; do sleep 1; done`,
+	}
+}
+
 type recordingInfraBackend struct {
 	mu       sync.Mutex
 	messages map[string][]protocol.Message
@@ -143,6 +165,28 @@ func TestProcessSupervisorLaunchAndStop(t *testing.T) {
 	}
 }
 
+func TestProcessSupervisorLaunchContextDoesNotOwnWorkloadLifetime(t *testing.T) {
+	sup := NewProcessSupervisor(nil, WithWorkDirBase(t.TempDir()), WithAttachedProcessTree())
+	ctx, cancel := context.WithCancel(context.Background())
+	guildID := "guild-launch-context"
+	agentID := "agent-launch-context"
+	agent := NewManagedAgent(guildID, agentID)
+	sup.mu.Lock()
+	sup.agents[scopedAgentKey(guildID, agentID)] = agent
+	sup.mu.Unlock()
+
+	require.NoError(t, sup.startProcess(ctx, guildID, agent, &protocol.AgentSpec{}, getSleepCmd(), nil))
+	pid := agent.GetPID()
+	require.Positive(t, pid)
+
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+	require.True(t, processExists(pid), "canceling the spawn context must not stop a supervisor-owned workload")
+
+	require.NoError(t, sup.Stop(context.Background(), guildID, agentID))
+	require.False(t, processExists(pid))
+}
+
 func TestProcessSupervisorCrashRestart(t *testing.T) {
 	sup := NewProcessSupervisor(nil, WithWorkDirBase(t.TempDir()))
 	ctx := context.Background()
@@ -159,18 +203,17 @@ func TestProcessSupervisorCrashRestart(t *testing.T) {
 		t.Fatalf("Failed to launch process: %v", err)
 	}
 
-	// Wait for process to exit and background monitor to catch it
-	time.Sleep(200 * time.Millisecond)
-
-	status, _ := sup.Status(ctx, guildID, "agent-crash")
-	if status != string(StateRestarting) {
-		t.Errorf("Expected status to be restarting, got %s", status)
-	}
+	// Wait for the process tree's stable-absence confirmation and for the
+	// background monitor to enter its bounded restart delay.
+	require.Eventually(t, func() bool {
+		status, _ := sup.Status(ctx, guildID, "agent-crash")
+		return status == string(StateRestarting)
+	}, 2*time.Second, 25*time.Millisecond)
 
 	require.NoError(t, sup.Stop(ctx, guildID, "agent-crash"))
 	time.Sleep(200 * time.Millisecond)
 
-	status, _ = sup.Status(ctx, guildID, "agent-crash")
+	status, _ := sup.Status(ctx, guildID, "agent-crash")
 	if status != string(StateStopped) {
 		t.Errorf("Expected status to be stopped after Stop(), got %s", status)
 	}
@@ -323,6 +366,112 @@ func TestProcessSupervisorAttachedProcessTreeStopsSubprocesses(t *testing.T) {
 	status, err := sup.Status(ctx, guildID, agentID)
 	require.NoError(t, err)
 	require.Equal(t, string(StateStopped), status)
+}
+
+func TestProcessSupervisorWaitsForProcessGroupBeforeReportingStopped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix process-group behavior")
+	}
+
+	sup := NewProcessSupervisor(
+		nil,
+		WithWorkDirBase(t.TempDir()),
+		WithAttachedProcessTree(),
+		withProcessTerminationTimeouts(400*time.Millisecond, time.Second),
+	)
+	guildID := "guild-stubborn"
+	agentID := "agent-stubborn"
+	agent := NewManagedAgent(guildID, agentID)
+	sup.mu.Lock()
+	sup.agents[scopedAgentKey(guildID, agentID)] = agent
+	sup.mu.Unlock()
+
+	require.NoError(t, sup.startProcess(context.Background(), guildID, agent, &protocol.AgentSpec{}, getStubbornChildTreeCmd(), nil))
+	workDir := sup.resolveAgentWorkDir(guildID, agentID)
+	childPIDPath := filepath.Join(workDir, "child.pid")
+	childPID := 0
+	require.Eventually(t, func() bool {
+		raw, err := os.ReadFile(childPIDPath)
+		if err != nil {
+			return false
+		}
+		childPID, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+		return err == nil && childPID > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- sup.Stop(context.Background(), guildID, agentID)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	require.NotEqual(t, StateStopped, agent.GetState())
+	require.True(t, processExists(childPID))
+
+	require.NoError(t, <-stopDone)
+	require.False(t, processExists(childPID))
+	require.Equal(t, StateStopped, agent.GetState())
+	require.Equal(t, 0, agent.GetPID())
+	require.Equal(t, 0, agent.GetProcessGroupID())
+	time.Sleep(250 * time.Millisecond)
+	require.Equal(t, 0, agent.RestartCount)
+}
+
+func TestProcessSupervisorStopsAgentsConcurrently(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix process-group behavior")
+	}
+
+	sup := NewProcessSupervisor(
+		nil,
+		WithWorkDirBase(t.TempDir()),
+		WithAttachedProcessTree(),
+		withProcessTerminationTimeouts(500*time.Millisecond, time.Second),
+	)
+	for _, agentID := range []string{"agent-one", "agent-two"} {
+		agent := NewManagedAgent("guild-concurrent", agentID)
+		sup.mu.Lock()
+		sup.agents[scopedAgentKey("guild-concurrent", agentID)] = agent
+		sup.mu.Unlock()
+		require.NoError(t, sup.startProcess(context.Background(), "guild-concurrent", agent, &protocol.AgentSpec{}, getStubbornChildTreeCmd(), nil))
+		childPIDPath := filepath.Join(sup.resolveAgentWorkDir("guild-concurrent", agentID), "child.pid")
+		require.Eventually(t, func() bool {
+			_, err := os.Stat(childPIDPath)
+			return err == nil
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	startedAt := time.Now()
+	require.NoError(t, sup.StopAll(context.Background()))
+	require.Less(t, time.Since(startedAt), 900*time.Millisecond)
+}
+
+func TestProcessSupervisorAllowsGracefulExitBeforeKillDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix signal behavior")
+	}
+
+	sup := NewProcessSupervisor(
+		nil,
+		WithWorkDirBase(t.TempDir()),
+		WithAttachedProcessTree(),
+		withProcessTerminationTimeouts(time.Second, time.Second),
+	)
+	guildID := "guild-graceful"
+	agentID := "agent-graceful"
+	agent := NewManagedAgent(guildID, agentID)
+	sup.mu.Lock()
+	sup.agents[scopedAgentKey(guildID, agentID)] = agent
+	sup.mu.Unlock()
+
+	require.NoError(t, sup.startProcess(context.Background(), guildID, agent, &protocol.AgentSpec{}, getGracefulTerminationCmd(), nil))
+	workDir := sup.resolveAgentWorkDir(guildID, agentID)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(workDir, "ready.txt"))
+		return err == nil
+	}, 5*time.Second, 25*time.Millisecond)
+	require.NoError(t, sup.Stop(context.Background(), guildID, agentID))
+	_, err := os.Stat(filepath.Join(workDir, "term.txt"))
+	require.NoError(t, err)
 }
 
 func TestProcessSupervisorEmitsLifecycleInfraEvents(t *testing.T) {

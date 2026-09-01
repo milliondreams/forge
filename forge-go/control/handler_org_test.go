@@ -23,9 +23,10 @@ import (
 )
 
 type fakeSupervisor struct {
-	mu       sync.Mutex
-	launched map[string]struct{}
-	stopped  map[string]struct{}
+	mu           sync.Mutex
+	launched     map[string]struct{}
+	stopped      map[string]struct{}
+	stopAllCalls int
 }
 
 func newFakeSupervisor() *fakeSupervisor {
@@ -77,7 +78,29 @@ func (f *fakeSupervisor) Status(ctx context.Context, guildID, agentID string) (s
 
 func (f *fakeSupervisor) StopAll(ctx context.Context) error {
 	_ = ctx
+	f.mu.Lock()
+	f.stopAllCalls++
+	f.mu.Unlock()
 	return nil
+}
+
+func TestHandler_StopAgentsOnExitPolicy(t *testing.T) {
+	standaloneSupervisor := newFakeSupervisor()
+	standaloneHandler := NewControlQueueHandler(nil, nil, nil, standaloneSupervisor, nil)
+	require.NoError(t, standaloneHandler.StopWithContext(context.Background()))
+	require.Equal(t, 0, standaloneSupervisor.stopAllCalls)
+
+	embeddedSupervisor := newFakeSupervisor()
+	embeddedHandler := NewControlQueueHandler(
+		nil,
+		nil,
+		nil,
+		embeddedSupervisor,
+		nil,
+		WithStopAgentsOnExit(true),
+	)
+	require.NoError(t, embeddedHandler.StopWithContext(context.Background()))
+	require.Equal(t, 1, embeddedSupervisor.stopAllCalls)
 }
 
 func TestHandler_OrganizationScopedSupervisors(t *testing.T) {

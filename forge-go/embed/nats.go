@@ -42,6 +42,10 @@ func StartEmbeddedNATSAt(addr string) (*EmbeddedNATS, error) {
 		JetStream: true,
 		StoreDir:  storeDir,
 		Port:      -1,
+		// Forge owns process signals. The embedded NATS server must not install
+		// its standalone SIGTERM handler, which calls os.Exit(0) and would abort
+		// Forge while it is still draining owned agent workloads.
+		NoSigs: true,
 	}
 
 	addr = strings.TrimSpace(addr)

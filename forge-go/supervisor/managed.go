@@ -19,13 +19,14 @@ const (
 type ManagedAgent struct {
 	mu sync.RWMutex
 
-	GuildID      string
-	ID           string
-	State        AgentState
-	PID          int
-	LaunchPID    int
-	RestartCount int
-	LastError    error
+	GuildID        string
+	ID             string
+	State          AgentState
+	PID            int
+	LaunchPID      int
+	ProcessGroupID int
+	RestartCount   int
+	LastError      error
 
 	// Timestamps
 	StartedAt  time.Time
@@ -88,6 +89,24 @@ func (m *ManagedAgent) GetLaunchPID() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.LaunchPID
+}
+
+func (m *ManagedAgent) SetProcessGroupID(processGroupID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ProcessGroupID = processGroupID
+}
+
+func (m *ManagedAgent) GetProcessGroupID() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ProcessGroupID
+}
+
+func (m *ManagedAgent) ClearProcessGroupID() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ProcessGroupID = 0
 }
 
 func (m *ManagedAgent) RequestStop() {

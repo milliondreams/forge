@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -164,13 +165,21 @@ func (h *ControlQueueHandler) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop terminates the background listener blocking routine.
-// If stopAgentsOnExit is false (the default for standalone clients),
-// only the listener is stopped — agents keep running across client restarts.
+// Stop terminates the background listener blocking routine and logs any
+// workload cleanup failure.
 func (h *ControlQueueHandler) Stop() {
+	if err := h.StopWithContext(context.Background()); err != nil {
+		slog.Warn("failed to stop managed agents during control handler shutdown", "error", err)
+	}
+}
+
+// StopWithContext terminates the listener and, when configured, waits for all
+// owned workloads to stop. Standalone clients leave stopAgentsOnExit disabled,
+// so their agents continue running across client restarts.
+func (h *ControlQueueHandler) StopWithContext(ctx context.Context) error {
 	h.listener.Stop()
 	if !h.stopAgentsOnExit {
-		return
+		return nil
 	}
 
 	supervisors := make([]supervisor.AgentSupervisor, 0, len(h.supByOrg)+1)
@@ -186,11 +195,13 @@ func (h *ControlQueueHandler) Stop() {
 		h.supMu.RUnlock()
 	}
 
+	var errs []error
 	for _, sup := range supervisors {
-		if err := sup.StopAll(context.Background()); err != nil {
-			slog.Warn("failed to stop managed agents during control handler shutdown", "error", err)
+		if err := sup.StopAll(ctx); err != nil {
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func (h *ControlQueueHandler) sendError(ctx context.Context, requestID, detail string) {
