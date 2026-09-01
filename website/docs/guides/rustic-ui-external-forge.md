@@ -101,14 +101,19 @@ llm_openai:
     aliases: [gpt-5.4, gpt]
     selectable: true
   requirements:
-    secrets: [OPENAI_API_KEY]
+    secrets:
+      - key: OPENAI_API_KEY
+        env: OPENAI_API_KEY
+        label: OpenAI API Key
+        optional: false
   properties:
     model: gpt-5.4
 ```
 
-Configure the selected Forge secret-provider chain and provision the declared
-secret for the organization before launch. See [Securing Secrets & OAuth](securing-secrets.md)
-for provider and OAuth setup.
+The profile remains visible when its credential is absent. Forge reports the
+missing organization-scoped key during mandatory launch preflight, and Rustic
+UI can store it from the Requirements step. See
+[Securing Secrets & OAuth](securing-secrets.md) for provider and OAuth setup.
 
 ## Network reachability
 
@@ -154,4 +159,3 @@ That desktop-only ownership does not transfer to hosted Rustic UI. See
 [Local Desktop Runtime](../use-cases/local-desktop.md) for the single-machine
 Forge topology and [Distributed Deployment](distributed-deployment.md) for
 worker placement and networking.
-

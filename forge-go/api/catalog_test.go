@@ -266,7 +266,7 @@ func TestGetAccessibleBlueprintsHTTP(t *testing.T) {
 	})
 }
 
-func TestLaunchGuildFromBlueprint_AppliesDependencyBindings(t *testing.T) {
+func TestLaunchGuildFromBlueprint_UsesProfileSelectionAndPreflight(t *testing.T) {
 	db, err := store.NewGormStore("sqlite", "file::memory:")
 	if err != nil {
 		t.Fatalf("failed to init db: %v", err)
@@ -288,6 +288,16 @@ llm_gemini:
 		t.Fatalf("failed to write dependency config: %v", err)
 	}
 	t.Setenv("FORGE_DEPENDENCY_CONFIG", configPath)
+	registryPath := filepath.Join(t.TempDir(), "agent-registry.yaml")
+	if err := os.WriteFile(registryPath, []byte(`entries:
+  - id: LLMAgent
+    class_name: rustic_ai.llm_agent.llm_agent.LLMAgent
+    runtime: uvx
+    package: rusticai-llm-agent
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FORGE_AGENT_REGISTRY", registryPath)
 
 	agentLevel := true
 	varName := "llm"
@@ -326,6 +336,19 @@ llm_gemini:
 					"class_name":  "rustic_ai.llm_agent.llm_agent.LLMAgent",
 				},
 			},
+			"configuration_schema": map[string]any{
+				"type": "object", "required": []any{"model"},
+				"properties": map[string]any{
+					"model": map[string]any{
+						"type": "string",
+						dependencyAnnotationKey: map[string]any{
+							"selection": "single", "required_type": requiredType,
+							"target": map[string]any{"kind": "agent_dependency", "agent_id": "research_agent", "dependency_key": "llm"},
+						},
+					},
+				},
+			},
+			"configuration": map[string]any{"model": "llm_openai"},
 		},
 	})
 	if err != nil {
@@ -335,14 +358,25 @@ llm_gemini:
 	mux := http.NewServeMux()
 	RegisterCatalogRoutes(mux, db)
 
+	guildID := "research-chat-1"
 	reqBody := LaunchGuildFromBlueprintRequest{
-		GuildName: "Research Chat",
-		UserID:    "user-1",
-		OrgID:     "org-1",
-		DependencyBindings: map[string]string{
-			"agent:research_agent:llm": "llm_gemini",
-		},
+		GuildID: &guildID, GuildName: "Research Chat", UserID: "user-1", OrgID: "org-1",
+		Configuration: map[string]interface{}{"model": "llm_gemini"},
 	}
+	preflightBody, _ := json.Marshal(reqBody)
+	preflightReq, _ := http.NewRequest("POST", "/catalog/blueprints/"+bp.ID+"/guilds/preflight", bytes.NewBuffer(preflightBody))
+	preflightReq.Header.Set("Content-Type", "application/json")
+	preflightRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(preflightRecorder, preflightReq)
+	if preflightRecorder.Code != http.StatusOK {
+		t.Fatalf("expected preflight 200, got %v: %s", preflightRecorder.Code, preflightRecorder.Body.String())
+	}
+	var preflight LaunchPreflightResponse
+	if err := json.NewDecoder(preflightRecorder.Body).Decode(&preflight); err != nil {
+		t.Fatal(err)
+	}
+	reqBody.PreflightID = preflight.ID
+	reqBody.Fingerprint = preflight.Fingerprint
 
 	b, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/catalog/blueprints/"+bp.ID+"/guilds", bytes.NewBuffer(b))

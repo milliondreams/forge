@@ -260,8 +260,10 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             raise RuntimeError("Guild is not initialized")
 
         aar = ctx.payload
-        agent_spec = self._materialize_dependency_selections(aar)
-        ensure_response = self.metastore.ensure_agent(self.guild_id, agent_spec)
+        agent_spec, profile_keys = self._materialize_dependency_selections(aar)
+        ensure_response = self.metastore.ensure_agent(
+            self.guild_id, agent_spec, profile_keys
+        )
         if ensure_response.get("created", True):
             self.guild.launch_agent(agent_spec)
 
@@ -294,9 +296,9 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
     def _materialize_dependency_selections(
         self, request: AgentLaunchRequest
-    ) -> AgentSpec:
+    ) -> tuple[AgentSpec, list[str]]:
         if not request.dependency_selections:
-            return request.agent_spec
+            return request.agent_spec, []
 
         agent_spec = request.agent_spec.model_copy(deep=True)
         catalogs = self.guild_spec.properties.get("dependency_selections", {})
@@ -358,7 +360,7 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
         agent_spec.name = base_name
         if agent_spec.name.casefold() in used_names:
             agent_spec.name = f"{base_name} ({digest})"
-        return agent_spec
+        return agent_spec, [profile_key for profile_key, _ in resolved_profiles]
 
     @staticmethod
     def _match_catalog_profiles(

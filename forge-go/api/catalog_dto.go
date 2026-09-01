@@ -95,13 +95,14 @@ type BlueprintReviewCreateRequest struct {
 }
 
 type LaunchGuildFromBlueprintRequest struct {
-	GuildID            *string                `json:"guild_id"`
-	GuildName          string                 `json:"guild_name"`
-	UserID             string                 `json:"user_id"`
-	OrgID              string                 `json:"org_id"`
-	Description        *string                `json:"description"`
-	Configuration      map[string]interface{} `json:"configuration"`
-	DependencyBindings map[string]string      `json:"dependency_bindings,omitempty"`
+	GuildID       *string                `json:"guild_id"`
+	GuildName     string                 `json:"guild_name"`
+	UserID        string                 `json:"user_id"`
+	OrgID         string                 `json:"org_id"`
+	Description   *string                `json:"description"`
+	Configuration map[string]interface{} `json:"configuration"`
+	PreflightID   string                 `json:"preflight_id"`
+	Fingerprint   string                 `json:"fingerprint"`
 }
 
 type AgentEntryResponse struct {

@@ -24,6 +24,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/guild/store"
 	"github.com/rustic-ai/forge/forge-go/messaging"
 	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/scheduler"
 	"github.com/rustic-ai/forge/forge-go/scheduler/leader"
 	"github.com/rustic-ai/forge/forge-go/secrets"
@@ -49,6 +50,10 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 		return fmt.Errorf("configure secret providers: %w", err)
 	}
 	defer secretProvider.Clear()
+	credentialRegistry, err := registry.Load("", nil)
+	if err != nil {
+		return fmt.Errorf("load agent credential declarations: %w", err)
+	}
 	if unsafeProviders {
 		l.Warn("UNSAFE SECRET PROVIDERS ENABLED; runtime credentials may be read outside the OS keychain", "providers", strings.Join(providerNames, ","))
 	}
@@ -245,6 +250,22 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 				req.ClientProperties["guild_spec"] = store.ToGuildSpec(gm)
 			}
 		}
+
+		credentialAgent := &req.AgentSpec
+		if gm != nil {
+			for index := range gm.Agents {
+				if gm.Agents[index].ID == agentID {
+					credentialAgent = store.ToAgentSpec(&gm.Agents[index])
+					break
+				}
+			}
+		}
+		resolvedRequirements, err := api.ResolveAgentCredentialRequirements(credentialAgent, credentialRegistry, cfg.DependencyConfig)
+		if err != nil {
+			_ = responder.SendError(ctx, req.RequestID, fmt.Sprintf("failed to resolve agent credential requirements: %v", err))
+			return
+		}
+		req.Requirements = resolvedRequirements
 
 		req.ResponseMode = protocol.SpawnResponseModeNone
 		payloadBytes, err := json.Marshal(req)

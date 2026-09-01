@@ -3,12 +3,12 @@ package envvars
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/oauth"
 	"github.com/rustic-ai/forge/forge-go/protocol"
-	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/secrets"
 )
 
@@ -41,23 +41,21 @@ func TestBuildAgentEnv(t *testing.T) {
 		},
 	}
 
-	agentSpec := &protocol.AgentSpec{
-		ID:        "AgentA",
-		Name:      "Agent A",
-		ClassName: "test.AgentA",
-		Resources: protocol.ResourceSpec{
-			Secrets: []string{"API_KEY", "DB_PASS"},
-		},
-	}
+	agentSpec := &protocol.AgentSpec{ID: "AgentA", Name: "Agent A", ClassName: "test.AgentA"}
+	orgID := "test-org"
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{
+		{Key: "API_KEY", Env: "API_KEY", Label: "API Key"},
+		{Key: "DB_PASS", Env: "DB_PASS", Label: "Database Password"},
+	}}
 
 	provider := &mockSecretProvider{
 		secrets: map[string]string{
-			"API_KEY": "secret123",
-			"DB_PASS": "passWORD",
+			secrets.SecretStoreKey(orgID, "API_KEY"): "secret123",
+			secrets.SecretStoreKey(orgID, "DB_PASS"): "passWORD",
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, nil, provider, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -91,9 +89,9 @@ func TestBuildAgentEnv(t *testing.T) {
 		t.Errorf("Unexpected FORGE_CLIENT_PROPERTIES_JSON: %v", parsedBackend)
 	}
 
-	// Verify missing secret is skipped gracefully
-	agentSpec.Resources.Secrets = append(agentSpec.Resources.Secrets, "MISSING_KEY")
-	envSlice, err = BuildAgentEnv(ctx, guildSpec, agentSpec, nil, provider, "")
+	optional := true
+	requirements.Secrets = append(requirements.Secrets, protocol.SecretNeed{Key: "MISSING_KEY", Env: "MISSING_KEY", Label: "Missing Key", Optional: &optional})
+	envSlice, err = BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("Expected BuildAgentEnv to succeed despite missing secret, got: %v", err)
 	}
@@ -127,7 +125,7 @@ func TestBuildAgentEnv_RedisOSOverride(t *testing.T) {
 	// Simulate OS environment variables set by StartLocal
 	t.Setenv("FORGE_CLIENT_PROPERTIES_JSON", `{"redis_client": {"host": "127.0.0.1", "port": "45629", "db": 0}}`)
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, nil, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, protocol.NewCredentialRequirements(), &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -183,7 +181,7 @@ func TestBuildAgentEnv_NATSAutoInjection(t *testing.T) {
 	// Case 1: NATS_URL env var set — should inject that URL.
 	t.Setenv("NATS_URL", "nats://nats.example.com:4222")
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, nil, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, protocol.NewCredentialRequirements(), &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -224,7 +222,7 @@ func TestBuildAgentEnv_NATSAutoInjection(t *testing.T) {
 	// Case 2: No NATS_URL set — should fall back to nats://localhost:4222.
 	t.Setenv("NATS_URL", "")
 
-	envSlice2, err := BuildAgentEnv(ctx, guildSpec, agentSpec, nil, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice2, err := BuildAgentEnv(ctx, guildSpec, agentSpec, protocol.NewCredentialRequirements(), &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -260,19 +258,18 @@ func TestBuildAgentEnv_RegistrySecretLabel(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentLabel", ClassName: "test.AgentLabel"}
 
-	regEntry := &registry.AgentRegistryEntry{
-		Secrets: []protocol.SecretNeed{
-			{Key: "OPENAI_API_KEY", Label: "OPENAI_TOKEN"},
-		},
-	}
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{
+		{Key: "OPENAI_API_KEY", Env: "OPENAI_TOKEN", Label: "OpenAI API Key"},
+	}}
+	orgID := "test-org"
 
 	provider := &mockSecretProvider{
 		secrets: map[string]string{
-			"OPENAI_API_KEY": "sk-test123",
+			secrets.SecretStoreKey(orgID, "OPENAI_API_KEY"): "sk-test123",
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, provider, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -304,10 +301,11 @@ func TestBuildAgentEnv_RegistrySecretKeyEqualsLabelWhenOmitted(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	regEntry := &registry.AgentRegistryEntry{Secrets: []protocol.SecretNeed{s}}
-	provider := &mockSecretProvider{secrets: map[string]string{"MY_SECRET": "value123"}}
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{s}}
+	orgID := "test-org"
+	provider := &mockSecretProvider{secrets: map[string]string{secrets.SecretStoreKey(orgID, "MY_SECRET"): "value123"}}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, provider, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -331,20 +329,20 @@ func TestBuildAgentEnv_OAuthTokenLabelDefaultsFromProvider(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentOAuth", ClassName: "test.AgentOAuth"}
 
-	// JSON with no "label" field — label should default to GITHUB_TOKEN via Normalize()
+	// OAuth environment targets are explicit and never inferred from labels.
 	var o protocol.OAuthNeed
-	if err := json.Unmarshal([]byte(`{"provider":"github"}`), &o); err != nil {
+	if err := json.Unmarshal([]byte(`{"provider":"github","env":"GITHUB_TOKEN"}`), &o); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	regEntry := &registry.AgentRegistryEntry{OAuth: []protocol.OAuthNeed{o}}
+	requirements := protocol.CredentialRequirements{OAuth: []protocol.OAuthNeed{o}}
 	provider := &mockSecretProvider{
 		secrets: map[string]string{
 			oauth.StoreKey(orgID, "github"): "ghp_default",
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, provider, orgID)
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -368,11 +366,9 @@ func TestBuildAgentEnv_OAuthToken(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentOAuth", ClassName: "test.AgentOAuth"}
 
-	regEntry := &registry.AgentRegistryEntry{
-		OAuth: []protocol.OAuthNeed{
-			{Provider: "github", Label: "GITHUB_TOKEN"},
-		},
-	}
+	requirements := protocol.CredentialRequirements{OAuth: []protocol.OAuthNeed{
+		{Provider: "github", Env: "GITHUB_TOKEN", Label: "GitHub Account"},
+	}}
 
 	provider := &mockSecretProvider{
 		secrets: map[string]string{
@@ -380,7 +376,7 @@ func TestBuildAgentEnv_OAuthToken(t *testing.T) {
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, provider, orgID)
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -404,15 +400,17 @@ func TestBuildAgentEnv_RegistrySecret_RequiredMissing(t *testing.T) {
 	agentSpec := &protocol.AgentSpec{ID: "AgentSec", ClassName: "test.AgentSec"}
 
 	optFalse := false
-	regEntry := &registry.AgentRegistryEntry{
-		Secrets: []protocol.SecretNeed{
-			{Key: "MISSING_KEY", Label: "MISSING_KEY", Optional: &optFalse},
-		},
-	}
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{
+		{Key: "MISSING_KEY", Env: "MISSING_KEY", Label: "Missing Key", Optional: &optFalse},
+	}}
 
-	_, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, &mockSecretProvider{secrets: map[string]string{}}, "")
+	_, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err == nil {
 		t.Fatal("expected error for missing required secret, got nil")
+	}
+	var missing *MissingCredentialError
+	if !errors.As(err, &missing) || missing.Kind != "secret" {
+		t.Fatalf("expected typed missing secret error, got %T: %v", err, err)
 	}
 }
 
@@ -422,13 +420,12 @@ func TestBuildAgentEnv_RegistrySecret_OptionalMissing(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentSec", ClassName: "test.AgentSec"}
 
-	regEntry := &registry.AgentRegistryEntry{
-		Secrets: []protocol.SecretNeed{
-			protocol.NewSecretNeed("OPTIONAL_KEY"), // Optional=nil by default (skip silently)
-		},
-	}
+	optional := true
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{
+		{Key: "OPTIONAL_KEY", Env: "OPTIONAL_KEY", Label: "Optional Key", Optional: &optional},
+	}}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("optional missing secret should be skipped, got: %v", err)
 	}
@@ -446,15 +443,17 @@ func TestBuildAgentEnv_OAuthToken_RequiredMissing(t *testing.T) {
 	agentSpec := &protocol.AgentSpec{ID: "AgentOAuth", ClassName: "test.AgentOAuth"}
 
 	optFalse := false
-	regEntry := &registry.AgentRegistryEntry{
-		OAuth: []protocol.OAuthNeed{
-			{Provider: "github", Label: "GITHUB_TOKEN", Optional: &optFalse},
-		},
-	}
+	requirements := protocol.CredentialRequirements{OAuth: []protocol.OAuthNeed{
+		{Provider: "github", Env: "GITHUB_TOKEN", Label: "GitHub Account", Optional: &optFalse},
+	}}
 
-	_, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, &mockSecretProvider{secrets: map[string]string{}}, "")
+	_, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err == nil {
 		t.Fatal("expected error for missing required OAuth token, got nil")
+	}
+	var missing *MissingCredentialError
+	if !errors.As(err, &missing) || missing.Kind != "oauth" {
+		t.Fatalf("expected typed missing OAuth error, got %T: %v", err, err)
 	}
 }
 
@@ -464,13 +463,12 @@ func TestBuildAgentEnv_OAuthToken_OptionalMissing(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentOAuth", ClassName: "test.AgentOAuth"}
 
-	regEntry := &registry.AgentRegistryEntry{
-		OAuth: []protocol.OAuthNeed{
-			protocol.NewOAuthNeed("github"), // Optional=nil by default (skip silently)
-		},
-	}
+	optional := true
+	requirements := protocol.CredentialRequirements{OAuth: []protocol.OAuthNeed{
+		{Provider: "github", Env: "GITHUB_TOKEN", Label: "GitHub Account", Optional: &optional},
+	}}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("optional missing OAuth token should be skipped, got: %v", err)
 	}
@@ -504,7 +502,7 @@ func TestBuildAgentEnv_SerializesAgentDependencyMap(t *testing.T) {
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, nil, &mockSecretProvider{secrets: map[string]string{}}, "")
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, protocol.NewCredentialRequirements(), &mockSecretProvider{secrets: map[string]string{}}, "")
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}
@@ -546,24 +544,23 @@ func TestBuildAgentEnv_RegistrySecret_WithOrgId(t *testing.T) {
 	guildSpec := &protocol.GuildSpec{ID: "test/guild", Name: "Test"}
 	agentSpec := &protocol.AgentSpec{ID: "AgentSec", ClassName: "test.AgentSec"}
 
-	regEntry := &registry.AgentRegistryEntry{
-		Secrets: []protocol.SecretNeed{
-			protocol.NewSecretNeed("TEST_GLOBAL_KEY"),
-			protocol.NewSecretNeed("ORG_KEY"),
-			protocol.NewSecretNeed("USER_NAME"),
-		},
-	}
+	requirements := protocol.CredentialRequirements{Secrets: []protocol.SecretNeed{
+		{Key: "TEST_GLOBAL_KEY", Env: "TEST_GLOBAL_KEY", Label: "Global Key"},
+		{Key: "ORG_KEY", Env: "ORG_KEY", Label: "Organization Key"},
+		{Key: "USER_NAME", Env: "USER_NAME", Label: "User Name"},
+	}}
 
 	provider := &mockSecretProvider{
 		secrets: map[string]string{
-			"TEST_GLOBAL_KEY":                          "myGlobalKey",
-			"USER_NAME":                                "globalUserName",
-			secrets.SecretStoreKey(orgID, "ORG_KEY"):   "myOrgKey",
-			secrets.SecretStoreKey(orgID, "USER_NAME"): "orgUserName",
+			"TEST_GLOBAL_KEY": "must-not-be-used",
+			"USER_NAME":       "must-not-be-used",
+			secrets.SecretStoreKey(orgID, "TEST_GLOBAL_KEY"): "myGlobalKey",
+			secrets.SecretStoreKey(orgID, "ORG_KEY"):         "myOrgKey",
+			secrets.SecretStoreKey(orgID, "USER_NAME"):       "orgUserName",
 		},
 	}
 
-	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, regEntry, provider, orgID)
+	envSlice, err := BuildAgentEnv(ctx, guildSpec, agentSpec, requirements, provider, orgID)
 	if err != nil {
 		t.Fatalf("BuildAgentEnv failed: %v", err)
 	}

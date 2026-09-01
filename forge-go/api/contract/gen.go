@@ -155,6 +155,84 @@ func (e JSONataPredicatePredicateType) Valid() bool {
 	}
 }
 
+// Defines values for LaunchPreflightResponseStatus.
+const (
+	LaunchPreflightResponseStatusBlocked LaunchPreflightResponseStatus = "blocked"
+	LaunchPreflightResponseStatusReady   LaunchPreflightResponseStatus = "ready"
+)
+
+// Valid indicates whether the value is a known member of the LaunchPreflightResponseStatus enum.
+func (e LaunchPreflightResponseStatus) Valid() bool {
+	switch e {
+	case LaunchPreflightResponseStatusBlocked:
+		return true
+	case LaunchPreflightResponseStatusReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LaunchRequirementKind.
+const (
+	Oauth  LaunchRequirementKind = "oauth"
+	Secret LaunchRequirementKind = "secret"
+)
+
+// Valid indicates whether the value is a known member of the LaunchRequirementKind enum.
+func (e LaunchRequirementKind) Valid() bool {
+	switch e {
+	case Oauth:
+		return true
+	case Secret:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LaunchRequirementStatus.
+const (
+	Configured          LaunchRequirementStatus = "configured"
+	InsufficientScope   LaunchRequirementStatus = "insufficient_scope"
+	Missing             LaunchRequirementStatus = "missing"
+	ProviderUnavailable LaunchRequirementStatus = "provider_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the LaunchRequirementStatus enum.
+func (e LaunchRequirementStatus) Valid() bool {
+	switch e {
+	case Configured:
+		return true
+	case InsufficientScope:
+		return true
+	case Missing:
+		return true
+	case ProviderUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LaunchRequirementSourceOrigin.
+const (
+	Agent   LaunchRequirementSourceOrigin = "agent"
+	Profile LaunchRequirementSourceOrigin = "profile"
+)
+
+// Valid indicates whether the value is a known member of the LaunchRequirementSourceOrigin enum.
+func (e LaunchRequirementSourceOrigin) Valid() bool {
+	switch e {
+	case Agent:
+		return true
+	case Profile:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PayloadTransformerStyle.
 const (
 	PayloadTransformerStyleContentBasedRouter PayloadTransformerStyle = "content_based_router"
@@ -847,9 +925,11 @@ type JsonValue = interface{}
 type LaunchGuildFromBlueprintRequest struct {
 	Configuration *map[string]interface{} `json:"configuration,omitempty"`
 	Description   *string                 `json:"description,omitempty"`
+	Fingerprint   string                  `json:"fingerprint"`
 	GuildId       *string                 `json:"guild_id,omitempty"`
 	GuildName     string                  `json:"guild_name"`
 	OrgId         string                  `json:"org_id"`
+	PreflightId   string                  `json:"preflight_id"`
 	UserId        string                  `json:"user_id"`
 }
 
@@ -868,6 +948,84 @@ type LaunchGuildReq struct {
 	//     routes (RoutingSlip): The routes to be attached to every message coming in the guild.
 	//     gateway (Optional[GatewayConfig]): Configuration for the automatic GatewayAgent.
 	Spec GuildSpec `json:"spec"`
+}
+
+// LaunchOAuthActionRequest defines model for LaunchOAuthActionRequest.
+type LaunchOAuthActionRequest struct {
+	ClientId     *string `json:"clientId,omitempty"`
+	ClientSecret *string `json:"clientSecret,omitempty"`
+}
+
+// LaunchPreflightRequest Request to evaluate the exact blueprint launch plan before launch.
+type LaunchPreflightRequest struct {
+	Configuration *map[string]interface{} `json:"configuration,omitempty"`
+	Description   *string                 `json:"description,omitempty"`
+	GuildId       string                  `json:"guild_id"`
+	GuildName     string                  `json:"guild_name"`
+	OrgId         string                  `json:"org_id"`
+	UserId        string                  `json:"user_id"`
+}
+
+// LaunchPreflightResponse defines model for LaunchPreflightResponse.
+type LaunchPreflightResponse struct {
+	ExpiresAt    time.Time                     `json:"expires_at"`
+	Fingerprint  string                        `json:"fingerprint"`
+	Id           string                        `json:"id"`
+	Ready        bool                          `json:"ready"`
+	Requirements []LaunchRequirement           `json:"requirements"`
+	Status       LaunchPreflightResponseStatus `json:"status"`
+}
+
+// LaunchPreflightResponseStatus defines model for LaunchPreflightResponse.Status.
+type LaunchPreflightResponseStatus string
+
+// LaunchRequirement defines model for LaunchRequirement.
+type LaunchRequirement struct {
+	Action        *LaunchRequirementAction  `json:"action,omitempty"`
+	Id            string                    `json:"id"`
+	Kind          LaunchRequirementKind     `json:"kind"`
+	Label         string                    `json:"label"`
+	MissingScopes *[]string                 `json:"missing_scopes,omitempty"`
+	Optional      bool                      `json:"optional"`
+	Scopes        *[]string                 `json:"scopes,omitempty"`
+	Sources       []LaunchRequirementSource `json:"sources"`
+	Status        LaunchRequirementStatus   `json:"status"`
+}
+
+// LaunchRequirementKind defines model for LaunchRequirement.Kind.
+type LaunchRequirementKind string
+
+// LaunchRequirementStatus defines model for LaunchRequirement.Status.
+type LaunchRequirementStatus string
+
+// LaunchRequirementAction defines model for LaunchRequirementAction.
+type LaunchRequirementAction struct {
+	Href                      string `json:"href"`
+	Kind                      string `json:"kind"`
+	Method                    string `json:"method"`
+	RequiresClientCredentials *bool  `json:"requires_client_credentials,omitempty"`
+}
+
+// LaunchRequirementConfiguredResponse defines model for LaunchRequirementConfiguredResponse.
+type LaunchRequirementConfiguredResponse struct {
+	Configured bool `json:"configured"`
+}
+
+// LaunchRequirementSource defines model for LaunchRequirementSource.
+type LaunchRequirementSource struct {
+	AgentId     string                        `json:"agent_id"`
+	AgentName   string                        `json:"agent_name"`
+	Origin      LaunchRequirementSourceOrigin `json:"origin"`
+	ProfileKey  *string                       `json:"profile_key,omitempty"`
+	ProfileName *string                       `json:"profile_name,omitempty"`
+}
+
+// LaunchRequirementSourceOrigin defines model for LaunchRequirementSource.Origin.
+type LaunchRequirementSourceOrigin string
+
+// LaunchSecretActionRequest defines model for LaunchSecretActionRequest.
+type LaunchSecretActionRequest struct {
+	Value []byte `json:"value"`
 }
 
 // MediaLink defines model for MediaLink.
@@ -1230,6 +1388,12 @@ type RoutingSlipInput struct {
 //	steps (List[RoutingEntry]): List of routing steps for the message. Each step is an edge in the routing slip.
 type RoutingSlipOutput struct {
 	Steps *[]RoutingRuleOutput `json:"steps,omitempty"`
+}
+
+// RusticCapabilitiesResponse defines model for RusticCapabilitiesResponse.
+type RusticCapabilitiesResponse struct {
+	Capabilities []string `json:"capabilities"`
+	Version      string   `json:"version"`
 }
 
 // SecretDeleteResponse defines model for SecretDeleteResponse.
@@ -1654,6 +1818,9 @@ type CreateBlueprintJSONRequestBody = BlueprintCreate
 // LaunchGuildFromBlueprintJSONRequestBody defines body for LaunchGuildFromBlueprint for application/json ContentType.
 type LaunchGuildFromBlueprintJSONRequestBody = LaunchGuildFromBlueprintRequest
 
+// PreflightGuildFromBlueprintJSONRequestBody defines body for PreflightGuildFromBlueprint for application/json ContentType.
+type PreflightGuildFromBlueprintJSONRequestBody = LaunchPreflightRequest
+
 // AddBlueprintAgentIconsJSONRequestBody defines body for AddBlueprintAgentIcons for application/json ContentType.
 type AddBlueprintAgentIconsJSONRequestBody = BlueprintAgentsIconReqRes
 
@@ -1668,6 +1835,12 @@ type ShareBlueprintWithOrganizationJSONRequestBody = ShareWithOrgRequest
 
 // CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
 type CreateCategoryJSONRequestBody = BlueprintCategoryCreate
+
+// AuthorizeLaunchOAuthJSONRequestBody defines body for AuthorizeLaunchOAuth for application/json ContentType.
+type AuthorizeLaunchOAuthJSONRequestBody = LaunchOAuthActionRequest
+
+// ConfigureLaunchSecretJSONRequestBody defines body for ConfigureLaunchSecret for application/json ContentType.
+type ConfigureLaunchSecretJSONRequestBody = LaunchSecretActionRequest
 
 // RegisterNodeJSONRequestBody defines body for RegisterNode for application/json ContentType.
 type RegisterNodeJSONRequestBody RegisterNodeJSONBody
@@ -2418,6 +2591,9 @@ type ServerInterface interface {
 	// GetMessageSchemaByClass Get Message Types
 	// (GET /api/registry/message_schema/)
 	GetMessageSchemaByClass(c *gin.Context, params GetMessageSchemaByClassParams)
+	// GetForgeCapabilities Get Forge Capabilities
+	// (GET /capabilities)
+	GetForgeCapabilities(c *gin.Context)
 	// GetAgents Get Agents
 	// (GET /catalog/agents)
 	GetAgents(c *gin.Context, params GetAgentsParams)
@@ -2442,6 +2618,9 @@ type ServerInterface interface {
 	// LaunchGuildFromBlueprint Launch Guild From Blueprint
 	// (POST /catalog/blueprints/{blueprint_id}/guilds)
 	LaunchGuildFromBlueprint(c *gin.Context, blueprintId string, params LaunchGuildFromBlueprintParams)
+	// PreflightGuildFromBlueprint Preflight Guild From Blueprint
+	// (POST /catalog/blueprints/{blueprint_id}/guilds/preflight)
+	PreflightGuildFromBlueprint(c *gin.Context, blueprintId string)
 	// GetBlueprintAgentIcons Get Bp Agent Icons
 	// (GET /catalog/blueprints/{blueprint_id}/icons/)
 	GetBlueprintAgentIcons(c *gin.Context, blueprintId string, params GetBlueprintAgentIconsParams)
@@ -2499,6 +2678,12 @@ type ServerInterface interface {
 	// AddUserToGuild Add User To Guild
 	// (POST /catalog/guilds/{guild_id}/users/{user_id})
 	AddUserToGuild(c *gin.Context, guildId string, userId string, params AddUserToGuildParams)
+	// AuthorizeLaunchOAuth Authorize an opaque launch OAuth requirement
+	// (POST /catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/oauth)
+	AuthorizeLaunchOAuth(c *gin.Context, preflightId string, requirementId string)
+	// ConfigureLaunchSecret Configure an opaque launch secret requirement
+	// (POST /catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/secret)
+	ConfigureLaunchSecret(c *gin.Context, preflightId string, requirementId string)
 	// GetOrganizationBlueprints Get Organization Blueprints
 	// (GET /catalog/organizations/{organization_id}/blueprints/owned/)
 	GetOrganizationBlueprints(c *gin.Context, organizationId string, params GetOrganizationBlueprintsParams)
@@ -3337,6 +3522,19 @@ func (siw *ServerInterfaceWrapper) GetMessageSchemaByClass(c *gin.Context) {
 	siw.Handler.GetMessageSchemaByClass(c, params)
 }
 
+// GetForgeCapabilities operation middleware
+func (siw *ServerInterfaceWrapper) GetForgeCapabilities(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetForgeCapabilities(c)
+}
+
 // GetAgents operation middleware
 func (siw *ServerInterfaceWrapper) GetAgents(c *gin.Context) {
 
@@ -3594,6 +3792,31 @@ func (siw *ServerInterfaceWrapper) LaunchGuildFromBlueprint(c *gin.Context) {
 	}
 
 	siw.Handler.LaunchGuildFromBlueprint(c, blueprintId, params)
+}
+
+// PreflightGuildFromBlueprint operation middleware
+func (siw *ServerInterfaceWrapper) PreflightGuildFromBlueprint(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "blueprint_id" -------------
+	var blueprintId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "blueprint_id", c.Param("blueprint_id"), &blueprintId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter blueprint_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreflightGuildFromBlueprint(c, blueprintId)
 }
 
 // GetBlueprintAgentIcons operation middleware
@@ -4321,6 +4544,74 @@ func (siw *ServerInterfaceWrapper) AddUserToGuild(c *gin.Context) {
 	}
 
 	siw.Handler.AddUserToGuild(c, guildId, userId, params)
+}
+
+// AuthorizeLaunchOAuth operation middleware
+func (siw *ServerInterfaceWrapper) AuthorizeLaunchOAuth(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "preflight_id" -------------
+	var preflightId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "preflight_id", c.Param("preflight_id"), &preflightId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter preflight_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "requirement_id" -------------
+	var requirementId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requirement_id", c.Param("requirement_id"), &requirementId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter requirement_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AuthorizeLaunchOAuth(c, preflightId, requirementId)
+}
+
+// ConfigureLaunchSecret operation middleware
+func (siw *ServerInterfaceWrapper) ConfigureLaunchSecret(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "preflight_id" -------------
+	var preflightId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "preflight_id", c.Param("preflight_id"), &preflightId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter preflight_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "requirement_id" -------------
+	var requirementId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requirement_id", c.Param("requirement_id"), &requirementId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter requirement_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ConfigureLaunchSecret(c, preflightId, requirementId)
 }
 
 // GetOrganizationBlueprints operation middleware
@@ -5085,6 +5376,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/guilds/:guild_id/:user_id/messages", wrapper.GetHistoricalUserMessages)
 	router.GET(options.BaseURL+"/api/registry/agents/", wrapper.GetAgentsByClass)
 	router.GET(options.BaseURL+"/api/registry/message_schema/", wrapper.GetMessageSchemaByClass)
+	router.GET(options.BaseURL+"/capabilities", wrapper.GetForgeCapabilities)
 	router.GET(options.BaseURL+"/catalog/agents", wrapper.GetAgents)
 	router.POST(options.BaseURL+"/catalog/agents", wrapper.RegisterAgent)
 	router.GET(options.BaseURL+"/catalog/agents/message_schema/", wrapper.GetMessageSchemaByFormat)
@@ -5093,6 +5385,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/catalog/blueprints/", wrapper.CreateBlueprint)
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id", wrapper.GetBlueprintById)
 	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/guilds", wrapper.LaunchGuildFromBlueprint)
+	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/guilds/preflight", wrapper.PreflightGuildFromBlueprint)
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/", wrapper.GetBlueprintAgentIcons)
 	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/", wrapper.AddBlueprintAgentIcons)
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/:agent_name", wrapper.GetBlueprintAgentIconByName)
@@ -5112,6 +5405,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/catalog/guilds/:guild_id/users", wrapper.GetUsersAddedToGuild)
 	router.DELETE(options.BaseURL+"/catalog/guilds/:guild_id/users/:user_id", wrapper.RemoveUserFromGuild)
 	router.POST(options.BaseURL+"/catalog/guilds/:guild_id/users/:user_id", wrapper.AddUserToGuild)
+	router.POST(options.BaseURL+"/catalog/launch-preflights/:preflight_id/requirements/:requirement_id/oauth", wrapper.AuthorizeLaunchOAuth)
+	router.POST(options.BaseURL+"/catalog/launch-preflights/:preflight_id/requirements/:requirement_id/secret", wrapper.ConfigureLaunchSecret)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/blueprints/owned/", wrapper.GetOrganizationBlueprints)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/blueprints/shared/", wrapper.GetSharedBlueprintsByOrganizationId)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/guilds/", wrapper.GetGuildsForOrganization)

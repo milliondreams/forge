@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/rustic-ai/forge/forge-go/helper/idgen"
@@ -71,6 +72,7 @@ func (d *DependencySpec) UnmarshalJSON(data []byte) error {
 
 type SecretNeed struct {
 	Key      string `json:"key" yaml:"key"`
+	Env      string `json:"env,omitempty" yaml:"env,omitempty"`
 	Label    string `json:"label,omitempty" yaml:"label,omitempty"`
 	Optional *bool  `json:"optional,omitempty" yaml:"optional,omitempty"`
 }
@@ -83,6 +85,10 @@ func NewSecretNeed(key string) SecretNeed {
 
 func (s *SecretNeed) Normalize() {
 	s.Key = strings.TrimSpace(s.Key)
+	s.Env = strings.TrimSpace(s.Env)
+	if s.Env == "" {
+		s.Env = s.Key
+	}
 	s.Label = strings.TrimSpace(s.Label)
 	if s.Label == "" {
 		s.Label = s.Key
@@ -100,11 +106,12 @@ func (s *SecretNeed) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// UnmarshalYAML accepts both plain string ("MY_KEY") and struct ({key: MY_KEY}) forms.
 func (s *SecretNeed) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode {
-		*s = NewSecretNeed(value.Value)
-		return nil
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("secret requirement must be an object")
+	}
+	if err := rejectUnknownYAMLFields(value, map[string]struct{}{"key": {}, "env": {}, "label": {}, "optional": {}}); err != nil {
+		return err
 	}
 	type alias SecretNeed
 	raw := alias(NewSecretNeed(""))
@@ -118,6 +125,7 @@ func (s *SecretNeed) UnmarshalYAML(value *yaml.Node) error {
 
 type OAuthNeed struct {
 	Provider string   `json:"provider" yaml:"provider"`
+	Env      string   `json:"env" yaml:"env"`
 	Label    string   `json:"label,omitempty" yaml:"label,omitempty"`
 	Scopes   []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`
 	Optional *bool    `json:"optional,omitempty" yaml:"optional,omitempty"`
@@ -126,7 +134,7 @@ type OAuthNeed struct {
 func NewOAuthNeed(provider string) OAuthNeed {
 	o := OAuthNeed{
 		Provider: provider,
-		Label:    strings.ToUpper(strings.TrimSpace(provider)) + "_TOKEN",
+		Label:    strings.TrimSpace(provider),
 		Scopes:   []string{},
 	}
 	o.Normalize()
@@ -135,9 +143,10 @@ func NewOAuthNeed(provider string) OAuthNeed {
 
 func (o *OAuthNeed) Normalize() {
 	o.Provider = strings.TrimSpace(o.Provider)
+	o.Env = strings.TrimSpace(o.Env)
 	o.Label = strings.TrimSpace(o.Label)
 	if o.Label == "" {
-		o.Label = strings.ToUpper(o.Provider) + "_TOKEN"
+		o.Label = o.Provider
 	}
 	if o.Scopes == nil {
 		o.Scopes = []string{}
@@ -145,6 +154,74 @@ func (o *OAuthNeed) Normalize() {
 	for i := range o.Scopes {
 		o.Scopes[i] = strings.TrimSpace(o.Scopes[i])
 	}
+}
+
+var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// CredentialRequirements declares only launch credentials. Network and
+// filesystem policy remain separate runtime concerns.
+type CredentialRequirements struct {
+	Secrets []SecretNeed `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	OAuth   []OAuthNeed  `json:"oauth,omitempty" yaml:"oauth,omitempty"`
+}
+
+func NewCredentialRequirements() CredentialRequirements {
+	return CredentialRequirements{Secrets: []SecretNeed{}, OAuth: []OAuthNeed{}}
+}
+
+func (r *CredentialRequirements) Normalize() {
+	if r.Secrets == nil {
+		r.Secrets = []SecretNeed{}
+	}
+	for i := range r.Secrets {
+		r.Secrets[i].Normalize()
+	}
+	if r.OAuth == nil {
+		r.OAuth = []OAuthNeed{}
+	}
+	for i := range r.OAuth {
+		r.OAuth[i].Normalize()
+	}
+}
+
+func (r CredentialRequirements) Validate() error {
+	seenSecrets := map[string]struct{}{}
+	for i, secret := range r.Secrets {
+		if secret.Key == "" {
+			return fmt.Errorf("secrets[%d].key is required", i)
+		}
+		if !environmentNamePattern.MatchString(secret.Env) {
+			return fmt.Errorf("secrets[%d].env %q is not a valid environment variable name", i, secret.Env)
+		}
+		if _, exists := seenSecrets[secret.Key]; exists {
+			return fmt.Errorf("secrets contains duplicate key %q", secret.Key)
+		}
+		seenSecrets[secret.Key] = struct{}{}
+	}
+	seenProviders := map[string]struct{}{}
+	for i, need := range r.OAuth {
+		if need.Provider == "" {
+			return fmt.Errorf("oauth[%d].provider is required", i)
+		}
+		if !environmentNamePattern.MatchString(need.Env) {
+			return fmt.Errorf("oauth[%d].env %q is not a valid environment variable name", i, need.Env)
+		}
+		if _, exists := seenProviders[need.Provider]; exists {
+			return fmt.Errorf("oauth contains duplicate provider %q", need.Provider)
+		}
+		seenProviders[need.Provider] = struct{}{}
+		seenScopes := map[string]struct{}{}
+		for j, scope := range need.Scopes {
+			if scope == "" || strings.ContainsAny(scope, " \t\r\n") {
+				return fmt.Errorf("oauth[%d].scopes[%d] is invalid", i, j)
+			}
+			if _, exists := seenScopes[scope]; exists {
+				return fmt.Errorf("oauth[%d].scopes contains duplicate %q", i, scope)
+			}
+			seenScopes[scope] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func (o *OAuthNeed) UnmarshalJSON(data []byte) error {
@@ -159,6 +236,12 @@ func (o *OAuthNeed) UnmarshalJSON(data []byte) error {
 }
 
 func (o *OAuthNeed) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("OAuth requirement must be an object")
+	}
+	if err := rejectUnknownYAMLFields(value, map[string]struct{}{"provider": {}, "env": {}, "label": {}, "scopes": {}, "optional": {}}); err != nil {
+		return err
+	}
 	type alias OAuthNeed
 	raw := alias{Scopes: []string{}}
 	if err := value.Decode(&raw); err != nil {
@@ -166,6 +249,16 @@ func (o *OAuthNeed) UnmarshalYAML(value *yaml.Node) error {
 	}
 	*o = OAuthNeed(raw)
 	o.Normalize()
+	return nil
+}
+
+func rejectUnknownYAMLFields(value *yaml.Node, allowed map[string]struct{}) error {
+	for index := 0; index+1 < len(value.Content); index += 2 {
+		key := value.Content[index].Value
+		if _, exists := allowed[key]; !exists {
+			return fmt.Errorf("field %q is not allowed", key)
+		}
+	}
 	return nil
 }
 

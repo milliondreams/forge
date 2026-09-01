@@ -19,6 +19,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/modelfit"
 	"github.com/rustic-ai/forge/forge-go/oauth"
 	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/secrets"
 	"github.com/rustic-ai/forge/forge-go/supervisor"
 )
@@ -37,6 +38,8 @@ type Server struct {
 	oauthTokens        *oauth.CachedTokenStore
 	oauthClients       *oauth.CachedClientCredentialsStore
 	secretManager      *secrets.Manager
+	credentialRegistry *registry.Registry
+	launchPreflights   *launchPreflightCache
 	configurationError error
 	listenAddr         string
 	server             *http.Server
@@ -73,8 +76,8 @@ func (s *Server) ValidateConfiguration() error {
 }
 
 // WithSecureStores initializes all managed credential persistence against the
-// OS keychain. The supplied provider is used only for launch-time reads and may
-// include explicitly requested unsafe read-only fallbacks.
+// OS keychain. The supplied provider is used only for launch-time reads of
+// organization-scoped storage keys; unscoped ambient names are never queried.
 func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	cfg, err := oauth.LoadProvidersConfig(forgepath.OAuthProvidersConfigPath())
 	if err != nil {
@@ -89,6 +92,25 @@ func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	// (name "Forge", uri omitted).
 	s.oauthManager = oauth.NewManagerWithStores(cfg, store, credStore,
 		oauth.WithDynamicClient(os.Getenv("FORGE_OAUTH_CLIENT_NAME"), os.Getenv("FORGE_OAUTH_CLIENT_URI")))
+	credentialRegistry, err := registry.Load("", s.oauthManager)
+	if err != nil {
+		return fmt.Errorf("load credential declarations from agent registry: %w", err)
+	}
+	profiles, err := loadConfiguredDependencyProfiles(dependencyConfigPath())
+	if err != nil {
+		return err
+	}
+	if err := validateCredentialCatalog(credentialRegistry, profiles); err != nil {
+		return fmt.Errorf("validate credential declarations: %w", err)
+	}
+	for key, profile := range profiles {
+		for _, requirement := range profile.Requirements.OAuth {
+			if err := s.oauthManager.ActivateProviderRequirements(requirement.Provider, requirement.Scopes); err != nil {
+				return fmt.Errorf("dependency profile %q OAuth requirements: %w", key, err)
+			}
+		}
+	}
+	s.credentialRegistry = credentialRegistry
 	keychain.SetOAuthManager(s.oauthManager)
 	secretStore := secrets.NewKeychainSecretStore()
 	metadata, ok := s.store.(secrets.MetadataIndex)
@@ -97,6 +119,16 @@ func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	}
 	s.secretManager = secrets.NewManagerWithMetadata(secretStore, metadata, provider)
 	return nil
+}
+
+// ResolveAgentCredentialRequirements recomputes the exact Forge-owned
+// credential declaration for one persisted agent. The result is carried only
+// in the internal spawn envelope and is never written into AgentSpec.
+func (s *Server) ResolveAgentCredentialRequirements(agent *protocol.AgentSpec, configPath string) (protocol.CredentialRequirements, error) {
+	if s.credentialRegistry == nil {
+		return protocol.CredentialRequirements{}, fmt.Errorf("credential registry is not configured")
+	}
+	return ResolveAgentCredentialRequirements(agent, s.credentialRegistry, configPath)
 }
 
 func (s *Server) ClearSecureCaches() {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/rustic-ai/forge/forge-go/guild/store"
@@ -12,14 +13,8 @@ import (
 
 const dependencyAnnotationKey = "x-rustic-profile"
 
-const (
-	dependencyValueShapeKey         = "key"
-	dependencyValueShapePublicEntry = "public_entry"
-)
-
 type blueprintDependencyAnnotation struct {
 	Selection    string                    `json:"selection"`
-	ValueShape   string                    `json:"value_shape"`
 	RequiredType string                    `json:"required_type"`
 	Filters      blueprintDependencyFilter `json:"filters"`
 	Target       blueprintDependencyTarget `json:"target"`
@@ -69,7 +64,6 @@ func materializeBlueprintDependencySelections(
 	bp *store.Blueprint,
 	spec *protocol.GuildSpec,
 	configuration map[string]interface{},
-	legacyBindings map[string]string,
 	configPath string,
 ) error {
 	schema, _ := bp.Spec["configuration_schema"].(map[string]interface{})
@@ -106,7 +100,7 @@ func materializeBlueprintDependencySelections(
 			}
 			continue
 		}
-		selected, err := selectedProfileKeys(value, annotation.Selection, annotation.ValueShape)
+		selected, err := selectedProfileKeys(value, annotation.Selection)
 		if err != nil {
 			return fmt.Errorf("configuration field %q: %w", fieldName, err)
 		}
@@ -120,10 +114,6 @@ func materializeBlueprintDependencySelections(
 			if !exists || !profileMatchesAnnotation(key, profile, annotation) {
 				return fmt.Errorf("profile %q is not allowed for configuration field %q", key, fieldName)
 			}
-			availability := profile.availability(key)
-			if availability.Status != "ready" {
-				return fmt.Errorf("profile %q is unavailable: %s", key, strings.Join(availability.Reasons, ", "))
-			}
 			runtimeSpec := profile.runtimeSpec()
 			if annotation.Target.Kind == "agent_dependency" {
 				agent := findAgent(spec, annotation.Target.AgentID)
@@ -134,11 +124,7 @@ func materializeBlueprintDependencySelections(
 					return fmt.Errorf("dependency selection conflicts with existing binding for agent %q dependency %q", annotation.Target.AgentID, annotation.Target.DependencyKey)
 				}
 				agent.DependencyMap[annotation.Target.DependencyKey] = runtimeSpec
-				appendUniqueSecrets(&agent.Resources, profile.Requirements.Secrets...)
-				bindingKey := "agent:" + annotation.Target.AgentID + ":" + annotation.Target.DependencyKey
-				if legacy, exists := legacyBindings[bindingKey]; exists && legacy != key {
-					return fmt.Errorf("dependency_bindings conflicts with configuration field %q", fieldName)
-				}
+				appendAgentProfileKey(agent, key)
 			} else {
 				internalKey := fmt.Sprintf("__selection_%s_%d", fieldName, index)
 				spec.DependencyMap[internalKey] = runtimeSpec
@@ -161,10 +147,38 @@ func materializeBlueprintDependencySelections(
 	if len(snapshots) > 0 {
 		spec.Properties["dependency_selections"] = snapshots
 	}
-	for index := range spec.Agents {
-		enrichAgentDependencyRequirements(&spec.Agents[index], profiles)
-	}
 	return nil
+}
+
+func appendAgentProfileKey(agent *protocol.AgentSpec, key string) {
+	if agent.Properties == nil {
+		agent.Properties = map[string]interface{}{}
+	}
+	keys := agentProfileKeys(agent)
+	if !containsFold(keys, key) {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	agent.Properties[protocol.DependencyProfilesProperty] = keys
+}
+
+func agentProfileKeys(agent *protocol.AgentSpec) []string {
+	if agent == nil || agent.Properties == nil {
+		return []string{}
+	}
+	raw := agent.Properties[protocol.DependencyProfilesProperty]
+	keys := []string{}
+	switch values := raw.(type) {
+	case []string:
+		keys = append(keys, values...)
+	case []interface{}:
+		for _, value := range values {
+			if key, ok := value.(string); ok && strings.TrimSpace(key) != "" {
+				keys = append(keys, strings.TrimSpace(key))
+			}
+		}
+	}
+	return keys
 }
 
 func configurationFieldRequired(schema map[string]interface{}, fieldName string) bool {
@@ -200,16 +214,6 @@ func validateDependencyAnnotation(s store.Store, bp *store.Blueprint, fieldName 
 		}
 	default:
 		return fmt.Errorf("configuration field %q has unsupported selection %q", fieldName, annotation.Selection)
-	}
-	valueShape := annotation.ValueShape
-	if valueShape == "" {
-		valueShape = dependencyValueShapeKey
-	}
-	if valueShape != dependencyValueShapeKey && valueShape != dependencyValueShapePublicEntry {
-		return fmt.Errorf("configuration field %q has unsupported value_shape %q", fieldName, valueShape)
-	}
-	if valueShape == dependencyValueShapePublicEntry && (annotation.Selection != "multiple" || annotation.Target.Kind != "runtime_catalog") {
-		return fmt.Errorf("configuration field %q public_entry values require a multiple runtime catalog selection", fieldName)
 	}
 	if annotation.Target.Kind == "runtime_catalog" {
 		if annotation.Target.CatalogKey == "" {
@@ -272,10 +276,7 @@ func profileMatchesAnnotation(key string, profile configuredDependencyProfile, a
 	return true
 }
 
-func selectedProfileKeys(value interface{}, selection, valueShape string) ([]string, error) {
-	if valueShape == "" {
-		valueShape = dependencyValueShapeKey
-	}
+func selectedProfileKeys(value interface{}, selection string) ([]string, error) {
 	if selection == "single" {
 		selected, ok := value.(string)
 		if !ok || strings.TrimSpace(selected) == "" {
@@ -294,14 +295,8 @@ func selectedProfileKeys(value interface{}, selection, valueShape string) ([]str
 		switch typed := value.(type) {
 		case string:
 			key = strings.TrimSpace(typed)
-		case map[string]interface{}:
-			if valueShape != dependencyValueShapePublicEntry {
-				return nil, fmt.Errorf("profile selections must contain unique strings")
-			}
-			key, _ = typed["key"].(string)
-			key = strings.TrimSpace(key)
 		default:
-			return nil, fmt.Errorf("profile selections must contain strings or public dependency entries")
+			return nil, fmt.Errorf("profile selections must contain strings")
 		}
 		if key == "" {
 			return nil, fmt.Errorf("profile selections must contain a non-empty key")

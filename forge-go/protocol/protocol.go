@@ -19,16 +19,17 @@ type ControlPusher interface {
 }
 
 type SpawnRequest struct {
-	RequestID        string            `json:"request_id"`
-	OrganizationID   string            `json:"organization_id,omitempty"`
-	GuildID          string            `json:"guild_id"`
-	AgentSpec        AgentSpec         `json:"agent_spec"`
-	MessagingConfig  *MessagingConfig  `json:"messaging_config,omitempty"`
-	MachineID        int               `json:"machine_id,omitempty"`
-	ClientType       string            `json:"client_type,omitempty"`
-	ClientProperties JSONB             `json:"client_properties,omitempty"`
-	ResponseMode     string            `json:"response_mode,omitempty"`
-	TraceContext     map[string]string `json:"trace_context,omitempty"`
+	RequestID        string                 `json:"request_id"`
+	OrganizationID   string                 `json:"organization_id,omitempty"`
+	GuildID          string                 `json:"guild_id"`
+	AgentSpec        AgentSpec              `json:"agent_spec"`
+	MessagingConfig  *MessagingConfig       `json:"messaging_config,omitempty"`
+	MachineID        int                    `json:"machine_id,omitempty"`
+	ClientType       string                 `json:"client_type,omitempty"`
+	ClientProperties JSONB                  `json:"client_properties,omitempty"`
+	Requirements     CredentialRequirements `json:"credential_requirements,omitempty"`
+	ResponseMode     string                 `json:"response_mode,omitempty"`
+	TraceContext     map[string]string      `json:"trace_context,omitempty"`
 }
 
 const (

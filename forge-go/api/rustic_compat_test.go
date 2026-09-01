@@ -248,7 +248,10 @@ llm_unavailable:
     display_name: Unavailable LLM
     selectable: true
   requirements:
-    secrets: [TEST_MISSING_DEPENDENCY_SECRET]
+    secrets:
+      - key: TEST_MISSING_DEPENDENCY_SECRET
+        env: TEST_MISSING_DEPENDENCY_SECRET
+        label: Test Missing Dependency Secret
   properties:
     model: unavailable
 llm_hidden:
@@ -277,9 +280,10 @@ llm_hidden:
 
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
-		require.Len(t, deps, 2)
+		require.Len(t, deps, 3)
 		require.Equal(t, "filesystem", deps[0].Key)
 		require.Equal(t, "llm_openai", deps[1].Key)
+		require.Equal(t, "llm_unavailable", deps[2].Key)
 	})
 
 	t.Run("include unavailable", func(t *testing.T) {
@@ -291,7 +295,7 @@ llm_hidden:
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
 		require.Len(t, deps, 3)
-		require.Equal(t, "needs_configuration", deps[2].Availability.Status)
+		require.Equal(t, "ready", deps[2].Availability.Status)
 	})
 
 	t.Run("filter by query", func(t *testing.T) {
@@ -302,7 +306,7 @@ llm_hidden:
 
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
-		require.Len(t, deps, 1)
+		require.Len(t, deps, 2)
 		require.Equal(t, "llm_openai", deps[0].Key)
 		require.Equal(t, "rustic_ai.core.llm.LLM", deps[0].ProvidedType)
 	})

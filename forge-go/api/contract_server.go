@@ -21,6 +21,22 @@ func (s *Server) HealthCheckHealthGet(c *gin.Context) {
 	ReplyJSON(c.Writer, http.StatusOK, map[string]string{"message": "All is well"})
 }
 
+func (s *Server) GetForgeCapabilities(c *gin.Context) {
+	s.dispatch(c, handleGetRusticCapabilities(), nil)
+}
+
+func (s *Server) PreflightGuildFromBlueprint(c *gin.Context, blueprintID string) {
+	s.dispatch(c, s.handlePreflightGuildFromBlueprint(), map[string]string{"blueprint_id": blueprintID})
+}
+
+func (s *Server) ConfigureLaunchSecret(c *gin.Context, preflightID string, requirementID string) {
+	s.dispatch(c, s.handleLaunchSecretAction(), map[string]string{"preflight_id": preflightID, "requirement_id": requirementID})
+}
+
+func (s *Server) AuthorizeLaunchOAuth(c *gin.Context, preflightID string, requirementID string) {
+	s.dispatch(c, s.handleLaunchOAuthAction(), map[string]string{"preflight_id": preflightID, "requirement_id": requirementID})
+}
+
 func (s *Server) Healthz(c *gin.Context) {
 	ReplyJSON(c.Writer, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -174,7 +190,7 @@ func (s *Server) GetBlueprintById(c *gin.Context, blueprintID string, _ contract
 }
 
 func (s *Server) LaunchGuildFromBlueprint(c *gin.Context, blueprintID string, _ contract.LaunchGuildFromBlueprintParams) {
-	s.dispatch(c, handleLaunchGuildFromBlueprint(s.store, s.controlPusher), map[string]string{"id": blueprintID})
+	s.dispatch(c, handleLaunchGuildFromBlueprint(s), map[string]string{"id": blueprintID})
 }
 
 func (s *Server) GetBlueprintAgentIcons(c *gin.Context, blueprintID string, _ contract.GetBlueprintAgentIconsParams) {

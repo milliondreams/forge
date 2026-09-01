@@ -1757,6 +1757,27 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LaunchPreflightRequest": {
+        "description": "Request to evaluate the exact blueprint launch plan before launch.",
+        "properties": {
+          "configuration": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Configuration",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "title": "Description"
+          },
+          "guild_id": {"type": "string", "title": "Guild Id"},
+          "guild_name": {"type": "string", "title": "Guild Name"},
+          "org_id": {"type": "string", "title": "Org Id"},
+          "user_id": {"type": "string", "title": "User Id"}
+        },
+        "required": ["guild_id", "guild_name", "user_id", "org_id"],
+        "type": "object"
+      },
       "LaunchGuildFromBlueprintRequest": {
         "description": "Request to launch a guild from a blueprint.",
         "properties": {
@@ -1777,6 +1798,10 @@
             ],
             "title": "Description"
           },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
           "guild_id": {
             "anyOf": [
               {
@@ -1796,6 +1821,10 @@
             "title": "Org Id",
             "type": "string"
           },
+          "preflight_id": {
+            "title": "Preflight Id",
+            "type": "string"
+          },
           "user_id": {
             "title": "User Id",
             "type": "string"
@@ -1804,9 +1833,87 @@
         "required": [
           "guild_name",
           "user_id",
-          "org_id"
+          "org_id",
+          "preflight_id",
+          "fingerprint"
         ],
         "title": "LaunchGuildFromBlueprintRequest",
+        "type": "object"
+      },
+      "LaunchRequirementAction": {
+        "properties": {
+          "href": {"type": "string"},
+          "kind": {"type": "string"},
+          "method": {"type": "string"},
+          "requires_client_credentials": {"type": "boolean"}
+        },
+        "required": ["kind", "method", "href"],
+        "type": "object"
+      },
+      "LaunchRequirementSource": {
+        "properties": {
+          "agent_id": {"type": "string"},
+          "agent_name": {"type": "string"},
+          "origin": {"enum": ["agent", "profile"], "type": "string"},
+          "profile_key": {"type": "string"},
+          "profile_name": {"type": "string"}
+        },
+        "required": ["agent_id", "agent_name", "origin"],
+        "type": "object"
+      },
+      "LaunchRequirement": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {"$ref": "#/components/schemas/LaunchRequirementAction"},
+              {"type": "null"}
+            ]
+          },
+          "id": {"type": "string"},
+          "kind": {"enum": ["secret", "oauth"], "type": "string"},
+          "label": {"type": "string"},
+          "missing_scopes": {"items": {"type": "string"}, "type": "array"},
+          "optional": {"type": "boolean"},
+          "scopes": {"items": {"type": "string"}, "type": "array"},
+          "sources": {
+            "items": {"$ref": "#/components/schemas/LaunchRequirementSource"},
+            "type": "array"
+          },
+          "status": {"enum": ["configured", "missing", "insufficient_scope", "provider_unavailable"], "type": "string"}
+        },
+        "required": ["id", "kind", "label", "optional", "status", "sources"],
+        "type": "object"
+      },
+      "LaunchSecretActionRequest": {
+        "properties": {"value": {"format": "byte", "type": "string"}},
+        "required": ["value"],
+        "type": "object"
+      },
+      "LaunchOAuthActionRequest": {
+        "properties": {
+          "clientId": {"type": "string"},
+          "clientSecret": {"type": "string"}
+        },
+        "type": "object"
+      },
+      "LaunchRequirementConfiguredResponse": {
+        "properties": {"configured": {"type": "boolean"}},
+        "required": ["configured"],
+        "type": "object"
+      },
+      "LaunchPreflightResponse": {
+        "properties": {
+          "expires_at": {"format": "date-time", "type": "string"},
+          "fingerprint": {"type": "string"},
+          "id": {"type": "string"},
+          "ready": {"type": "boolean"},
+          "requirements": {
+            "items": {"$ref": "#/components/schemas/LaunchRequirement"},
+            "type": "array"
+          },
+          "status": {"enum": ["ready", "blocked"], "type": "string"}
+        },
+        "required": ["id", "fingerprint", "status", "ready", "expires_at", "requirements"],
         "type": "object"
       },
       "LaunchGuildReq": {
@@ -3137,6 +3244,14 @@
           "aliases",
           "availability"
         ]
+      },
+      "RusticCapabilitiesResponse": {
+        "properties": {
+          "capabilities": {"items": {"type": "string"}, "type": "array"},
+          "version": {"type": "string"}
+        },
+        "required": ["version", "capabilities"],
+        "type": "object"
       }
     }
   },
@@ -3146,6 +3261,22 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/capabilities": {
+      "get": {
+        "operationId": "getForgeCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/RusticCapabilitiesResponse"}
+              }
+            },
+            "description": "Supported Forge API capabilities"
+          }
+        },
+        "summary": "Get Forge Capabilities"
+      }
+    },
     "/__health": {
       "get": {
         "operationId": "health_check___health_get",
@@ -4825,6 +4956,47 @@
         ]
       }
     },
+    "/catalog/blueprints/{blueprint_id}/guilds/preflight": {
+      "post": {
+        "operationId": "preflightGuildFromBlueprint",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "blueprint_id",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/LaunchPreflightRequest"}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/LaunchPreflightResponse"}
+              }
+            },
+            "description": "Launch requirements evaluated"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight Guild From Blueprint",
+        "tags": ["blueprints", "guilds"]
+      }
+    },
     "/catalog/blueprints/{blueprint_id}/guilds": {
       "post": {
         "operationId": "launchGuildFromBlueprint",
@@ -4870,6 +5042,14 @@
             },
             "description": "Successful Response"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/LaunchPreflightResponse"}
+              }
+            },
+            "description": "Preflight expired, changed, or is no longer ready"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4886,6 +5066,68 @@
           "blueprints",
           "guilds"
         ]
+      }
+    },
+    "/catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/secret": {
+      "post": {
+        "operationId": "configureLaunchSecret",
+        "parameters": [
+          {"in": "path", "name": "preflight_id", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "requirement_id", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/LaunchSecretActionRequest"}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/LaunchRequirementConfiguredResponse"}
+              }
+            },
+            "description": "Launch secret configured"
+          },
+          "404": {"description": "Launch requirement not found or expired"},
+          "422": {"description": "Validation Error"}
+        },
+        "summary": "Configure an opaque launch secret requirement",
+        "tags": ["guilds"]
+      }
+    },
+    "/catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/oauth": {
+      "post": {
+        "operationId": "authorizeLaunchOAuth",
+        "parameters": [
+          {"in": "path", "name": "preflight_id", "required": true, "schema": {"type": "string"}},
+          {"in": "path", "name": "requirement_id", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/LaunchOAuthActionRequest"}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/AuthorizeResponse"}
+              }
+            },
+            "description": "OAuth authorization started"
+          },
+          "404": {"description": "Launch requirement not found or expired"},
+          "422": {"description": "Validation Error"}
+        },
+        "summary": "Authorize an opaque launch OAuth requirement",
+        "tags": ["guilds"]
       }
     },
     "/catalog/blueprints/{blueprint_id}/icons/": {

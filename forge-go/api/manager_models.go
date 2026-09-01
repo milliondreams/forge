@@ -35,6 +35,12 @@ type EnsureAgentResponse struct {
 	Created bool   `json:"created"`
 }
 
+type EnsureAgentRequest struct {
+	Version            string              `json:"version"`
+	AgentSpec          *protocol.AgentSpec `json:"agent_spec"`
+	DependencyProfiles []string            `json:"dependency_profiles"`
+}
+
 type UpdateAgentStatusRequest struct {
 	Status store.AgentStatus `json:"status"`
 }

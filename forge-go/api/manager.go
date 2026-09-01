@@ -203,10 +203,15 @@ func (s *Server) HandleManagerEnsureAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var spec protocol.AgentSpec
-	if !decodeJSONBody(w, r, &spec) {
+	var req EnsureAgentRequest
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	if req.Version != "1" || req.AgentSpec == nil {
+		ReplyError(w, http.StatusUnprocessableEntity, "version 1 and agent_spec are required")
+		return
+	}
+	spec := *req.AgentSpec
 	spec.Normalize()
 	if strings.TrimSpace(spec.ID) == "" {
 		ReplyError(w, http.StatusUnprocessableEntity, "agent id is required")
@@ -214,10 +219,27 @@ func (s *Server) HandleManagerEnsureAgent(w http.ResponseWriter, r *http.Request
 	}
 	profiles, err := loadConfiguredDependencyProfiles(dependencyConfigPath())
 	if err != nil {
-		ReplyError(w, http.StatusInternalServerError, "failed to load dependency requirements")
+		ReplyError(w, http.StatusInternalServerError, "failed to load dependency profiles")
 		return
 	}
-	enrichAgentDependencyRequirements(&spec, profiles)
+	seenProfiles := map[string]struct{}{}
+	for _, profileKey := range req.DependencyProfiles {
+		profileKey = strings.TrimSpace(profileKey)
+		if profileKey == "" {
+			ReplyError(w, http.StatusUnprocessableEntity, "dependency profile keys must not be empty")
+			return
+		}
+		if _, duplicate := seenProfiles[profileKey]; duplicate {
+			ReplyError(w, http.StatusUnprocessableEntity, "dependency profile keys must be unique")
+			return
+		}
+		if _, exists := profiles[profileKey]; !exists {
+			ReplyError(w, http.StatusUnprocessableEntity, "unknown dependency profile")
+			return
+		}
+		seenProfiles[profileKey] = struct{}{}
+		appendAgentProfileKey(&spec, profileKey)
+	}
 
 	if existing, err := s.store.GetAgent(guildID, spec.ID); err == nil {
 		if !agentSpecsEquivalent(store.ToAgentSpec(existing), &spec) {

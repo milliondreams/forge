@@ -6,16 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/rustic-ai/forge/forge-go/guild"
 	"github.com/rustic-ai/forge/forge-go/guild/store"
-	"github.com/rustic-ai/forge/forge-go/helper/idgen"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
-	"gopkg.in/yaml.v3"
 )
 
 func RegisterCatalogRoutes(mux *http.ServeMux, s store.Store) {
@@ -27,6 +24,7 @@ func RegisterCatalogRoutesWithRuntime(mux *http.ServeMux, s store.Store, pusher 
 }
 
 func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.ControlPusher) {
+	authority := &Server{store: s, controlPusher: pusher, launchPreflights: newLaunchPreflightCache()}
 	mux.HandleFunc("POST /catalog/blueprints", handleCreateBlueprint(s))
 	mux.HandleFunc("GET /catalog/blueprints", handleListBlueprints(s))
 	mux.HandleFunc("GET /catalog/blueprints/{id}", handleGetBlueprint(s))
@@ -70,7 +68,8 @@ func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.Co
 	mux.HandleFunc("GET /catalog/users/{user_id}/guilds", handleGetGuildsForUser(s))
 	mux.HandleFunc("GET /catalog/organizations/{org_id}/guilds", handleGetGuildsForOrg(s))
 
-	mux.HandleFunc("POST /catalog/blueprints/{id}/guilds", handleLaunchGuildFromBlueprint(s, pusher))
+	mux.HandleFunc("POST /catalog/blueprints/{blueprint_id}/guilds/preflight", authority.handlePreflightGuildFromBlueprint())
+	mux.HandleFunc("POST /catalog/blueprints/{id}/guilds", handleLaunchGuildFromBlueprint(authority))
 }
 
 func handleListBlueprints(s store.Store) http.HandlerFunc {
@@ -1055,119 +1054,8 @@ func blueprintDependencyBindingKey(agentID string, dep AgentDependencyEntry) str
 	return "agent:" + agentID + ":" + dep.DependencyKey
 }
 
-func applyBlueprintDependencyBindings(
-	s store.Store,
-	bp *store.Blueprint,
-	spec *protocol.GuildSpec,
-	bindings map[string]string,
-	configPath string,
-) error {
-	if len(bindings) == 0 {
-		return nil
-	}
-
-	configuredByKey, err := loadConfiguredDependencySpecsByKey(configPath)
-	if err != nil {
-		return err
-	}
-
-	summaries, err := resolveBlueprintDependencies(s, bp, configPath)
-	if err != nil {
-		return err
-	}
-
-	allowedByBindingKey := map[string]map[string]protocol.DependencySpec{}
-	for _, summary := range summaries {
-		for _, dep := range summary.Dependencies {
-			if _, exists := allowedByBindingKey[dep.BindingKey]; !exists {
-				allowedByBindingKey[dep.BindingKey] = map[string]protocol.DependencySpec{}
-			}
-			for _, provider := range dep.Providers {
-				spec, ok := configuredByKey[provider.Key]
-				if ok {
-					allowedByBindingKey[dep.BindingKey][provider.Key] = spec
-				}
-			}
-		}
-	}
-
-	if spec.DependencyMap == nil {
-		spec.DependencyMap = map[string]protocol.DependencySpec{}
-	}
-
-	for bindingKey, providerKey := range bindings {
-		allowedProviders, ok := allowedByBindingKey[bindingKey]
-		if !ok {
-			return fmt.Errorf("unknown dependency binding %q", bindingKey)
-		}
-		resolvedSpec, ok := allowedProviders[providerKey]
-		if !ok {
-			return fmt.Errorf("provider %q is not valid for binding %q", providerKey, bindingKey)
-		}
-
-		if strings.HasPrefix(bindingKey, "shared:") {
-			dependencyKey := strings.TrimPrefix(bindingKey, "shared:")
-			spec.DependencyMap[dependencyKey] = resolvedSpec
-			continue
-		}
-
-		if strings.HasPrefix(bindingKey, "agent:") {
-			rest := strings.TrimPrefix(bindingKey, "agent:")
-			parts := strings.SplitN(rest, ":", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid dependency binding key %q", bindingKey)
-			}
-			agentID := parts[0]
-			dependencyKey := parts[1]
-
-			applied := false
-			for i := range spec.Agents {
-				if spec.Agents[i].ID != agentID {
-					continue
-				}
-				if spec.Agents[i].DependencyMap == nil {
-					spec.Agents[i].DependencyMap = map[string]protocol.DependencySpec{}
-				}
-				spec.Agents[i].DependencyMap[dependencyKey] = resolvedSpec
-				applied = true
-				break
-			}
-			if !applied {
-				return fmt.Errorf("agent %q not found for binding %q", agentID, bindingKey)
-			}
-			continue
-		}
-
-		return fmt.Errorf("unsupported dependency binding key %q", bindingKey)
-	}
-
-	return nil
-}
-
 func loadConfiguredDependencyEntries(configPath, providedType string) ([]ConfiguredDependencyEntry, error) {
 	return safeConfiguredDependencyEntries(configPath, providedType, "", false)
-}
-
-func loadConfiguredDependencySpecsByKey(configPath string) (map[string]protocol.DependencySpec, error) {
-	fileData, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]protocol.DependencySpec{}, nil
-		}
-		return nil, fmt.Errorf("read dependency config: %w", err)
-	}
-
-	var fileDeps map[string]protocol.DependencySpec
-	if err := yaml.Unmarshal(fileData, &fileDeps); err != nil {
-		return nil, fmt.Errorf("parse dependency config: %w", err)
-	}
-
-	for key, spec := range fileDeps {
-		spec.Normalize()
-		fileDeps[key] = spec
-	}
-
-	return fileDeps, nil
 }
 
 func catalogAgentToResponse(a *store.CatalogAgentEntry) AgentEntryResponse {
@@ -1312,7 +1200,7 @@ func handleGetGuildsForOrg(s store.Store) http.HandlerFunc {
 	}
 }
 
-func handleLaunchGuildFromBlueprint(s store.Store, pusher protocol.ControlPusher) http.HandlerFunc {
+func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		blueprintID := r.PathValue("id")
 		var req LaunchGuildFromBlueprintRequest
@@ -1324,8 +1212,12 @@ func handleLaunchGuildFromBlueprint(s store.Store, pusher protocol.ControlPusher
 			ReplyError(w, http.StatusUnprocessableEntity, "guild_name, user_id and org_id are required")
 			return
 		}
+		if strings.TrimSpace(req.PreflightID) == "" || strings.TrimSpace(req.Fingerprint) == "" {
+			ReplyError(w, http.StatusUnprocessableEntity, "preflight_id and fingerprint are required")
+			return
+		}
 
-		blueprint, err := s.GetBlueprint(blueprintID)
+		blueprint, err := server.store.GetBlueprint(blueprintID)
 		if err != nil {
 			if err == store.ErrNotFound {
 				ReplyError(w, http.StatusNotFound, "Blueprint not found")
@@ -1335,7 +1227,7 @@ func handleLaunchGuildFromBlueprint(s store.Store, pusher protocol.ControlPusher
 			return
 		}
 
-		allowed, err := canLaunchBlueprint(s, blueprint, req.UserID, req.OrgID)
+		allowed, err := canLaunchBlueprint(server.store, blueprint, req.UserID, req.OrgID)
 		if err != nil {
 			ReplyError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1345,92 +1237,41 @@ func handleLaunchGuildFromBlueprint(s store.Store, pusher protocol.ControlPusher
 			return
 		}
 
-		specMap := map[string]interface{}{}
-		if b, err := json.Marshal(blueprint.Spec); err == nil {
-			_ = json.Unmarshal(b, &specMap)
-		}
-
-		if rawSchema, ok := specMap["configuration_schema"]; ok {
-			schema, ok := rawSchema.(map[string]interface{})
-			if !ok {
-				ReplyError(w, http.StatusUnprocessableEntity, "configuration_schema must be object")
-				return
-			}
-			baseCfg := map[string]interface{}{}
-			if rawCfg, ok := specMap["configuration"]; ok {
-				if cast, ok := rawCfg.(map[string]interface{}); ok {
-					baseCfg = cast
-				}
-			}
-			mergedCfg := map[string]interface{}{}
-			for k, v := range baseCfg {
-				mergedCfg[k] = v
-			}
-			for k, v := range req.Configuration {
-				mergedCfg[k] = v
-			}
-			if err := validateAgainstSchema(schema, mergedCfg); err != nil {
-				ReplyError(w, http.StatusUnprocessableEntity, "configuration and/or schema invalid. "+err.Error())
-				return
-			}
-			specMap["configuration"] = mergedCfg
-		}
-
-		specBytes, _ := json.Marshal(specMap)
-		var guildSpec protocol.GuildSpec
-		if err := json.Unmarshal(specBytes, &guildSpec); err != nil {
-			ReplyError(w, http.StatusUnprocessableEntity, "invalid guild spec")
-			return
-		}
-		// Resolve mustache {{ }} placeholders from the (merged) configuration bag,
-		// mirroring the Python API server's GuildBuilder._from_spec_dict(...) at
-		// launch. Without this, placeholders leak into the launched guild spec.
-		rendered, err := guild.RenderConfiguration(&guildSpec)
+		guildSpec, err := materializeBlueprintLaunch(server.store, blueprint, req)
 		if err != nil {
-			ReplyError(w, http.StatusUnprocessableEntity, "invalid guild spec: "+err.Error())
+			ReplyError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		guildSpec = *rendered
-		if req.GuildID != nil {
-			guildSpec.ID = *req.GuildID
-		}
-		if guildSpec.ID == "" {
-			guildSpec.ID = idgen.NewShortUUID()
-		}
-		guildSpec.Name = req.GuildName
-		if req.Description != nil {
-			guildSpec.Description = *req.Description
-		}
-		if err := materializeBlueprintDependencySelections(
-			s, blueprint, &guildSpec, guildSpec.Configuration, req.DependencyBindings, dependencyConfigPath(),
-		); err != nil {
-			ReplyError(w, http.StatusUnprocessableEntity, "invalid dependency selection: "+err.Error())
+		current, err := server.evaluateRequirements(guildSpec, req.OrgID)
+		if err != nil {
+			ReplyError(w, http.StatusInternalServerError, "failed to check launch requirements: "+err.Error())
 			return
 		}
-		if err := applyBlueprintDependencyBindings(s, blueprint, &guildSpec, req.DependencyBindings, dependencyConfigPath()); err != nil {
-			ReplyError(w, http.StatusUnprocessableEntity, "invalid dependency_bindings: "+err.Error())
+		if !server.validateLaunchPreflight(req.PreflightID, req.Fingerprint, req.UserID, req.OrgID, blueprintID, current.Fingerprint, current.Ready) {
+			server.rememberLaunchPreflight(&current, req.UserID, req.OrgID, blueprintID)
+			ReplyJSON(w, http.StatusPreconditionFailed, current)
 			return
 		}
 
 		var model *store.GuildModel
-		if pusher != nil {
-			model, err = guild.Bootstrap(r.Context(), s, pusher, nil, &guildSpec, req.OrgID, dependencyConfigPath())
+		if server.controlPusher != nil {
+			model, err = guild.Bootstrap(r.Context(), server.store, server.controlPusher, nil, guildSpec, req.OrgID, dependencyConfigPath())
 			if err != nil {
 				ReplyError(w, http.StatusInternalServerError, "failed to create guild: "+err.Error())
 				return
 			}
 		} else {
-			model = store.FromGuildSpec(&guildSpec, req.OrgID)
-			if err := s.CreateGuild(model); err != nil {
+			model = store.FromGuildSpec(guildSpec, req.OrgID)
+			if err := server.store.CreateGuild(model); err != nil {
 				ReplyError(w, http.StatusInternalServerError, "failed to create guild: "+err.Error())
 				return
 			}
 		}
-		if err := s.AddUserToGuild(model.ID, req.UserID); err != nil {
+		if err := server.store.AddUserToGuild(model.ID, req.UserID); err != nil {
 			ReplyError(w, http.StatusInternalServerError, "failed to add user to guild: "+err.Error())
 			return
 		}
-		if err := s.AddGuildToBlueprint(blueprint.ID, model.ID); err != nil {
+		if err := server.store.AddGuildToBlueprint(blueprint.ID, model.ID); err != nil {
 			ReplyError(w, http.StatusInternalServerError, "failed to associate blueprint with guild: "+err.Error())
 			return
 		}

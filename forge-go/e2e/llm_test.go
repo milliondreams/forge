@@ -95,10 +95,8 @@ func TestLevel3_LLMAgentIntegration(t *testing.T) {
 	t.Setenv("FORGE_CLIENT_TYPE", "RedisMessagingBackend")
 	t.Setenv("FORGE_CLIENT_PROPERTIES_JSON", fmt.Sprintf(`{"organization_id": "%s", "redis_client": {"host": "%s", "port": %s, "db": 0}}`, orgID, s.Host(), s.Port()))
 	t.Setenv("PYTHONUNBUFFERED", "1")
-	t.Setenv("OPENAI_API_KEY", "dummy-openai-key")       // Required by forge-agent-registry.yaml
-	t.Setenv("ANTHROPIC_API_KEY", "dummy-anthropic-key") // Required by forge-agent-registry.yaml
-	t.Setenv("GEMINI_API_KEY", "dummy-gemini-key")       // Required by forge-agent-registry.yaml
-	t.Setenv("UNREQUESTED_SECRET", "should-be-dropped")  // Negative test to ensure it does not leak into child
+	t.Setenv("OPENAI_API_KEY", "must-not-be-inferred-from-the-LLM-agent-class")
+	t.Setenv("UNREQUESTED_SECRET", "should-be-dropped")
 
 	secretProvider := secrets.NewChainSecretProvider(
 		secrets.NewEnvSecretProvider(),
@@ -112,7 +110,7 @@ func TestLevel3_LLMAgentIntegration(t *testing.T) {
 	require.NoError(t, err, "Failed to load custom registry yaml")
 
 	entry, _ := r.Lookup(agentSpec.ClassName)
-	envVars, err := envvars.BuildAgentEnv(ctx, guildSpec, &agentSpec, entry, secretProvider, "")
+	envVars, err := envvars.BuildAgentEnv(ctx, guildSpec, &agentSpec, entry.Requirements, secretProvider, "")
 	require.NoError(t, err)
 
 	// Negative Test: Ensure unrequested host environment variables are NOT passed into the child

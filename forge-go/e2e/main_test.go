@@ -50,6 +50,12 @@ func TestMain(m *testing.M) {
 		_ = os.Setenv("FORGE_LOCAL_USER_NAME", "Test User")
 		_ = os.Setenv("FORGE_LOCAL_ORGANIZATION_ID", "test-org")
 		_ = os.Setenv("FORGE_LOCAL_ORGANIZATION_NAME", "Test Organization")
+		registryPath, _ := filepath.Abs(filepath.Join("..", "conf", "forge-agent-registry.yaml"))
+		dependencyPath, _ := filepath.Abs(filepath.Join("..", "conf", "agent-dependencies.yaml"))
+		oauthPath, _ := filepath.Abs(filepath.Join("..", "conf", "oauth-providers.yaml"))
+		_ = os.Setenv("FORGE_AGENT_REGISTRY", registryPath)
+		_ = os.Setenv("FORGE_DEPENDENCY_CONFIG", dependencyPath)
+		_ = os.Setenv("FORGE_OAUTH_PROVIDERS_CONFIG", oauthPath)
 
 		if _, lookErr := exec.LookPath("uvx"); lookErr != nil {
 			if ensureErr := registry.EnsureUV(); ensureErr != nil {

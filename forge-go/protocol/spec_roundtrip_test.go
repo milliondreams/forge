@@ -142,6 +142,7 @@ func TestAgentNeedsJSONRoundTrip_FullPayloadParity(t *testing.T) {
 			Secrets: []SecretNeed{
 				{
 					Key:      "OPENAI_API_KEY",
+					Env:      "OPENAI_API_KEY",
 					Label:    "OpenAI API Key",
 					Optional: &optionalTrue,
 				},
@@ -149,6 +150,7 @@ func TestAgentNeedsJSONRoundTrip_FullPayloadParity(t *testing.T) {
 			OAuth: []OAuthNeed{
 				{
 					Provider: "google",
+					Env:      "GOOGLE_ACCESS_TOKEN",
 					Label:    "Google Account",
 					Scopes:   []string{"gmail.readonly", "drive.readonly"},
 					Optional: &optionalFalse,

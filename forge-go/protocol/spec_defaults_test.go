@@ -157,8 +157,8 @@ func TestAgentNeedsUnmarshal_Defaults(t *testing.T) {
 	if len(needs.Needs.OAuth) != 1 || needs.Needs.OAuth[0].Provider != "google" {
 		t.Fatalf("expected normalized oauth provider")
 	}
-	if needs.Needs.OAuth[0].Label != "GOOGLE_TOKEN" {
-		t.Fatalf("expected oauth label to default to GOOGLE_TOKEN, got %q", needs.Needs.OAuth[0].Label)
+	if needs.Needs.OAuth[0].Label != "google" {
+		t.Fatalf("expected oauth label to default to provider, got %q", needs.Needs.OAuth[0].Label)
 	}
 	if needs.Needs.OAuth[0].Optional != nil {
 		t.Fatalf("expected oauth optional by default (nil), got non-nil")
@@ -202,8 +202,8 @@ needs:
 	if gh.Provider != "github" {
 		t.Errorf("expected trimmed provider 'github', got %q", gh.Provider)
 	}
-	if gh.Label != "GITHUB_TOKEN" {
-		t.Errorf("expected label defaulted to GITHUB_TOKEN, got %q", gh.Label)
+	if gh.Label != "github" {
+		t.Errorf("expected label defaulted to provider, got %q", gh.Label)
 	}
 	if gh.Scopes == nil {
 		t.Errorf("expected non-nil scopes slice")

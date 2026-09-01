@@ -215,12 +215,25 @@ func launchGuildFromBlueprint(
 	guildName string,
 ) string {
 	t.Helper()
+	guildID := "guild-" + strings.ToLower(strings.ReplaceAll(guildName, " ", "-"))
 	body := map[string]interface{}{
+		"guild_id":   guildID,
 		"guild_name": guildName,
 		"user_id":    defaultUserID,
 		"org_id":     defaultOrganizationID,
 	}
 	endpoint := fmt.Sprintf("%s/catalog/blueprints/%s/guilds", base, url.PathEscape(blueprintID))
+	preflightBody, status := postJSON(t, client, endpoint+"/preflight", body, nil)
+	require.Equal(t, http.StatusOK, status, "preflight failed: %s", string(preflightBody))
+	var preflight struct {
+		ID          string `json:"id"`
+		Fingerprint string `json:"fingerprint"`
+		Ready       bool   `json:"ready"`
+	}
+	require.NoError(t, json.Unmarshal(preflightBody, &preflight))
+	require.True(t, preflight.Ready, "preflight blocked: %s", string(preflightBody))
+	body["preflight_id"] = preflight.ID
+	body["fingerprint"] = preflight.Fingerprint
 	respBody, status := postJSON(t, client, endpoint, body, nil)
 	require.Equal(t, http.StatusCreated, status, "launch guild failed: %s", string(respBody))
 	var idResp struct {

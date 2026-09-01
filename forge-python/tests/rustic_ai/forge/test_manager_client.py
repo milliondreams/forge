@@ -100,12 +100,15 @@ def test_manager_client_request_payload_shapes():
     )
     rule = RoutingRule(agent_type="test.Agent")
 
-    metastore.ensure_agent("g-1", agent_spec)
+    metastore.ensure_agent("g-1", agent_spec, ["llm_gemini"])
     metastore.add_routing_rule("g-1", rule)
     metastore.remove_routing_rule("g-1", "hash-1")
 
     assert "/manager/guilds/g-1/agents/ensure" in captured
-    assert '"id":"a-1"' in captured["/manager/guilds/g-1/agents/ensure"]
+    ensure_payload = captured["/manager/guilds/g-1/agents/ensure"]
+    assert '"version":"1"' in ensure_payload
+    assert '"agent_spec":{"id":"a-1"' in ensure_payload
+    assert '"dependency_profiles":["llm_gemini"]' in ensure_payload
     assert "/manager/guilds/g-1/routes" in captured
 
 

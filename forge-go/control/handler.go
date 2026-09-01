@@ -393,12 +393,17 @@ func (h *ControlQueueHandler) handleSpawn(ctx context.Context, req *protocol.Spa
 		}
 	}
 
-	envVars, err := envvars.BuildAgentEnv(ctx, guildSpec, &req.AgentSpec, entry, h.secrets, orgID)
+	envVars, err := envvars.BuildAgentEnv(ctx, guildSpec, &req.AgentSpec, req.Requirements, h.secrets, orgID)
 	if err != nil {
+		reason := "env_build_failed"
+		var missingCredential *envvars.MissingCredentialError
+		if errors.As(err, &missingCredential) {
+			reason = "credential_missing"
+		}
 		slog.Error("handleSpawn: env var build failed", "agent_id", req.AgentSpec.ID, "error", err)
 		_ = h.emitSpawnRejected(ctx, req, "spawn rejected because environment build failed", map[string]any{
 			"error":  err.Error(),
-			"reason": "env_build_failed",
+			"reason": reason,
 		})
 		if !shouldSuppressSpawnResponse(req) {
 			h.sendError(ctx, req.RequestID, fmt.Sprintf("failed to build environment variables: %v", err))

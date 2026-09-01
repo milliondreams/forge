@@ -42,7 +42,11 @@ embeddings:
     aliases: [openai-embeddings]
     selectable: true
   requirements:
-    secrets: [OPENAI_API_KEY]
+    secrets:
+      - key: OPENAI_API_KEY
+        env: OPENAI_API_KEY
+        label: OpenAI API Key
+        optional: false
   properties: {}
 embeddings_local_nomic:
   class_name: rustic_ai.langchain.agent_ext.embeddings.openai.OpenAIEmbeddingsResolver
@@ -206,7 +210,11 @@ llm_openai:
     aliases: [gpt-5.4, gpt]
     selectable: true
   requirements:
-    secrets: [OPENAI_API_KEY]
+    secrets:
+      - key: OPENAI_API_KEY
+        env: OPENAI_API_KEY
+        label: OpenAI API Key
+        optional: false
   properties:
     model: gpt-5.4
 
@@ -223,7 +231,11 @@ llm_anthropic_sonnet:
     aliases: [claude-sonnet, sonnet]
     selectable: true
   requirements:
-    secrets: [ANTHROPIC_API_KEY]
+    secrets:
+      - key: ANTHROPIC_API_KEY
+        env: ANTHROPIC_API_KEY
+        label: Anthropic API Key
+        optional: false
   properties:
     model: anthropic/claude-sonnet-4-6
 
@@ -237,7 +249,11 @@ llm_anthropic_opus:
     aliases: [claude-opus, opus]
     selectable: true
   requirements:
-    secrets: [ANTHROPIC_API_KEY]
+    secrets:
+      - key: ANTHROPIC_API_KEY
+        env: ANTHROPIC_API_KEY
+        label: Anthropic API Key
+        optional: false
   properties:
     model: anthropic/claude-opus-4-6
 
@@ -254,12 +270,17 @@ llm_gemini:
     aliases: [gemini]
     selectable: true
   requirements:
-    secrets: [GEMINI_API_KEY]
+    secrets:
+      - key: GEMINI_API_KEY
+        env: GEMINI_API_KEY
+        label: Gemini API Key
+        optional: false
   properties:
     model: gemini/gemini-3.1-pro-preview
 
 # --- Google Vertex AI ---
-# Requires: GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION
+# Incomplete example: project, location, and ADC configuration must be supplied
+# as deployment configuration. Project and location are not secrets.
 
 llm_vertexai:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
@@ -269,9 +290,7 @@ llm_vertexai:
     provider: vertex_ai
     capabilities: [chat, tools]
     aliases: [vertex, vertex-gemini]
-    selectable: true
-  requirements:
-    secrets: [GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION]
+    selectable: false
   properties:
     model: vertex_ai/gemini-3.1-pro-preview
     conf:
@@ -279,7 +298,7 @@ llm_vertexai:
       vertex_location: null
 
 # --- AWS Bedrock ---
-# Requires: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME
+# Requires the two declared secrets plus a deployment-configured AWS region.
 
 llm_bedrock:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
@@ -289,16 +308,25 @@ llm_bedrock:
     provider: bedrock
     capabilities: [chat]
     aliases: [bedrock]
-    selectable: true
+    selectable: false
   requirements:
-    secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME]
+    secrets:
+      - key: AWS_ACCESS_KEY_ID
+        env: AWS_ACCESS_KEY_ID
+        label: AWS Access Key ID
+        optional: false
+      - key: AWS_SECRET_ACCESS_KEY
+        env: AWS_SECRET_ACCESS_KEY
+        label: AWS Secret Access Key
+        optional: false
   properties:
     model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
     conf:
       custom_llm_provider: bedrock
 
 # --- Azure OpenAI ---
-# Requires: AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION
+# Requires the declared secret plus deployment/base URL, API version, and model
+# deployment configuration.
 
 llm_azure:
   class_name: rustic_ai.litellm.agent_ext.llm.LiteLLMResolver
@@ -308,9 +336,13 @@ llm_azure:
     provider: azure
     capabilities: [chat, tools]
     aliases: [azure-openai]
-    selectable: true
+    selectable: false
   requirements:
-    secrets: [AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION]
+    secrets:
+      - key: AZURE_API_KEY
+        env: AZURE_API_KEY
+        label: Azure OpenAI API Key
+        optional: false
   properties:
     model: azure/<your-deployment-name>
     conf:
@@ -330,7 +362,11 @@ llm_cohere:
     aliases: [cohere]
     selectable: true
   requirements:
-    secrets: [COHERE_API_KEY]
+    secrets:
+      - key: COHERE_API_KEY
+        env: COHERE_API_KEY
+        label: Cohere API Key
+        optional: false
   properties:
     model: cohere_chat/command-r-plus
 
@@ -347,6 +383,10 @@ llm_groq:
     aliases: [groq]
     selectable: true
   requirements:
-    secrets: [GROQ_API_KEY]
+    secrets:
+      - key: GROQ_API_KEY
+        env: GROQ_API_KEY
+        label: Groq API Key
+        optional: false
   properties:
     model: groq/llama-3.3-70b-versatile

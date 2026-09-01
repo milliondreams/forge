@@ -1,9 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"fmt"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -21,16 +21,12 @@ type dependencyCatalogMetadata struct {
 	Selectable   *bool    `yaml:"selectable"`
 }
 
-type dependencyRequirements struct {
-	Secrets []string `yaml:"secrets"`
-}
-
 type configuredDependencyProfile struct {
-	ClassName    string                    `yaml:"class_name"`
-	ProvidedType string                    `yaml:"provided_type"`
-	Properties   map[string]interface{}    `yaml:"properties"`
-	Catalog      dependencyCatalogMetadata `yaml:"catalog"`
-	Requirements dependencyRequirements    `yaml:"requirements"`
+	ClassName    string                          `yaml:"class_name"`
+	ProvidedType string                          `yaml:"provided_type"`
+	Properties   map[string]interface{}          `yaml:"properties"`
+	Catalog      dependencyCatalogMetadata       `yaml:"catalog"`
+	Requirements protocol.CredentialRequirements `yaml:"requirements,omitempty"`
 }
 
 func (p configuredDependencyProfile) selectable() bool {
@@ -41,63 +37,11 @@ func (p configuredDependencyProfile) runtimeSpec() protocol.DependencySpec {
 	return protocol.DependencySpec{ClassName: p.ClassName, ProvidedType: p.ProvidedType, Properties: p.Properties}
 }
 
-func appendUniqueSecrets(resources *protocol.ResourceSpec, names ...string) {
-	seen := make(map[string]struct{}, len(resources.Secrets)+len(names))
-	result := make([]string, 0, len(resources.Secrets)+len(names))
-	for _, name := range append(append([]string{}, resources.Secrets...), names...) {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
-		result = append(result, name)
-	}
-	resources.Secrets = result
-}
-
-// enrichAgentDependencyRequirements adds requirements only when a dependency
-// exactly and uniquely matches a configured profile. This preserves legacy
-// explicit dependency specs without guessing between similar profiles.
-func enrichAgentDependencyRequirements(agent *protocol.AgentSpec, profiles map[string]configuredDependencyProfile) {
-	profileKeys := make([]string, 0)
-	for _, dependency := range agent.DependencyMap {
-		type profileMatch struct {
-			key     string
-			profile configuredDependencyProfile
-		}
-		matches := make([]profileMatch, 0, 1)
-		for key, profile := range profiles {
-			if dependencyMatchesProfile(dependency, profile) {
-				matches = append(matches, profileMatch{key: key, profile: profile})
-			}
-		}
-		if len(matches) == 1 {
-			appendUniqueSecrets(&agent.Resources, matches[0].profile.Requirements.Secrets...)
-			profileKeys = append(profileKeys, matches[0].key)
-		}
-	}
-	if len(profileKeys) > 0 {
-		sort.Strings(profileKeys)
-		agent.Properties[protocol.DependencyProfilesProperty] = profileKeys
-	}
-}
-
-func dependencyMatchesProfile(dependency protocol.DependencySpec, profile configuredDependencyProfile) bool {
-	runtimeSpec := profile.runtimeSpec()
-	if dependency.ClassName != runtimeSpec.ClassName || !reflect.DeepEqual(dependency.Properties, runtimeSpec.Properties) {
-		return false
-	}
-	return dependency.ProvidedType == "" || dependency.ProvidedType == runtimeSpec.ProvidedType
-}
-
 func (p configuredDependencyProfile) availability(key string) DependencyAvailability {
-	if len(p.Requirements.Secrets) == 0 || scheduler.GlobalNodeRegistry.AnyHealthyNodeReadyFor([]string{key}) {
+	if scheduler.GlobalNodeRegistry.AnyHealthyNodeReadyFor([]string{key}) || len(scheduler.GlobalNodeRegistry.ListHealthy()) == 0 {
 		return DependencyAvailability{Status: "ready", Reasons: []string{}}
 	}
-	return DependencyAvailability{Status: "needs_configuration", Reasons: []string{"not ready on any eligible node"}}
+	return DependencyAvailability{Status: "unavailable", Reasons: []string{"profile is not configured on any eligible node"}}
 }
 
 func (p configuredDependencyProfile) publicEntry(key string) ConfiguredDependencyEntry {
@@ -126,7 +70,9 @@ func loadConfiguredDependencyProfiles(configPath string) (map[string]configuredD
 		return nil, fmt.Errorf("read dependency config: %w", err)
 	}
 	profiles := map[string]configuredDependencyProfile{}
-	if err := yaml.Unmarshal(data, &profiles); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&profiles); err != nil {
 		return nil, fmt.Errorf("parse dependency config: %w", err)
 	}
 	for key, profile := range profiles {
@@ -134,6 +80,10 @@ func loadConfiguredDependencyProfiles(configPath string) (map[string]configuredD
 		profile.ProvidedType = strings.TrimSpace(profile.ProvidedType)
 		if profile.Properties == nil {
 			profile.Properties = map[string]interface{}{}
+		}
+		profile.Requirements.Normalize()
+		if err := profile.Requirements.Validate(); err != nil {
+			return nil, fmt.Errorf("profile %q requirements: %w", key, err)
 		}
 		profiles[key] = profile
 	}
@@ -168,25 +118,14 @@ func safeConfiguredDependencyEntries(configPath, providedType, capability string
 
 // ReadyDependencyProfileKeys evaluates a node's configured profiles without
 // exposing requirement names in node registration payloads.
-func ReadyDependencyProfileKeys(configPath string, secretExists func(string) (bool, error)) ([]string, error) {
+func ReadyDependencyProfileKeys(configPath string, _ func(string) (bool, error)) ([]string, error) {
 	profiles, err := loadConfiguredDependencyProfiles(configPath)
 	if err != nil {
 		return nil, err
 	}
 	ready := make([]string, 0, len(profiles))
 	for key, profile := range profiles {
-		isReady := true
-		for _, name := range profile.Requirements.Secrets {
-			exists, err := secretExists(name)
-			if err != nil {
-				return nil, fmt.Errorf("check requirement for profile %q: %w", key, err)
-			}
-			if !exists {
-				isReady = false
-				break
-			}
-		}
-		if isReady {
+		if profile.selectable() {
 			ready = append(ready, key)
 		}
 	}

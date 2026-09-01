@@ -89,7 +89,7 @@ func TestMaterializeLocalNomicEmbeddingSelection(t *testing.T) {
 	}
 	configuration := map[string]interface{}{"embedding_profile": "embeddings_local_nomic"}
 	configPath := filepath.Join("..", "conf", "agent-dependencies.yaml")
-	if err := materializeBlueprintDependencySelections(db, bp, &spec, configuration, nil, configPath); err != nil {
+	if err := materializeBlueprintDependencySelections(db, bp, &spec, configuration, configPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,10 @@ cloud:
     aliases: [cloud-model]
     selectable: true
   requirements:
-    secrets: [TEST_CLOUD_API_KEY]
+    secrets:
+      - key: TEST_CLOUD_API_KEY
+        env: TEST_CLOUD_API_KEY
+        label: Test Cloud API Key
   properties:
     model: cloud/model
 `
@@ -143,8 +146,8 @@ cloud:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Key != "local" {
-		t.Fatalf("ready dependency catalog = %#v, want only local", entries)
+	if len(entries) != 2 {
+		t.Fatalf("credential readiness must not hide selectable profiles: %#v", entries)
 	}
 	allSelectable, err := safeConfiguredDependencyEntries(configPath, testLLMType, "chat", true)
 	if err != nil {
@@ -172,14 +175,10 @@ cloud:
 		t.Fatal(err)
 	}
 	configuration := map[string]interface{}{
-		"model": "local",
-		"dynamic_models": []interface{}{map[string]interface{}{
-			"key":          "local",
-			"display_name": "Spoofed Model",
-			"aliases":      []interface{}{"spoofed"},
-		}},
+		"model":          "local",
+		"dynamic_models": []interface{}{"local"},
 	}
-	if err := materializeBlueprintDependencySelections(db, bp, &spec, configuration, nil, configPath); err != nil {
+	if err := materializeBlueprintDependencySelections(db, bp, &spec, configuration, configPath); err != nil {
 		t.Fatal(err)
 	}
 	if spec.Agents[0].DependencyMap["llm"].Properties["model"] != "local/model" {
@@ -199,24 +198,20 @@ cloud:
 	}
 }
 
-func TestSelectedProfileKeys_PublicEntriesAndCompatibility(t *testing.T) {
+func TestSelectedProfileKeys_RequiresProfileKeyStrings(t *testing.T) {
 	tests := []struct {
-		name       string
-		value      interface{}
-		valueShape string
-		want       []string
-		wantError  string
+		name      string
+		value     interface{}
+		want      []string
+		wantError string
 	}{
-		{name: "key compatibility", value: []interface{}{"local"}, valueShape: dependencyValueShapePublicEntry, want: []string{"local"}},
-		{name: "public entry", value: []interface{}{map[string]interface{}{"key": "local", "display_name": "Local"}}, valueShape: dependencyValueShapePublicEntry, want: []string{"local"}},
-		{name: "mixed", value: []interface{}{"local", map[string]interface{}{"key": "remote"}}, valueShape: dependencyValueShapePublicEntry, want: []string{"local", "remote"}},
-		{name: "objects rejected by key fields", value: []interface{}{map[string]interface{}{"key": "local"}}, valueShape: dependencyValueShapeKey, wantError: "unique strings"},
-		{name: "missing key", value: []interface{}{map[string]interface{}{"display_name": "Local"}}, valueShape: dependencyValueShapePublicEntry, wantError: "non-empty key"},
-		{name: "duplicate key", value: []interface{}{"local", map[string]interface{}{"key": "local"}}, valueShape: dependencyValueShapePublicEntry, wantError: "unique keys"},
+		{name: "keys", value: []interface{}{"local", "remote"}, want: []string{"local", "remote"}},
+		{name: "objects rejected", value: []interface{}{map[string]interface{}{"key": "local"}}, wantError: "must contain strings"},
+		{name: "duplicate key", value: []interface{}{"local", "local"}, wantError: "unique keys"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := selectedProfileKeys(test.value, "multiple", test.valueShape)
+			got, err := selectedProfileKeys(test.value, "multiple")
 			if test.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantError) {
 					t.Fatalf("selectedProfileKeys() error = %v, want containing %q", err, test.wantError)
@@ -233,21 +228,22 @@ func TestSelectedProfileKeys_PublicEntriesAndCompatibility(t *testing.T) {
 	}
 }
 
-func TestPublicEntryConfigurationSchemaAcceptsRichAndKeySelections(t *testing.T) {
+func TestProfileConfigurationSchemaAcceptsOnlyKeys(t *testing.T) {
 	schema := testDependencyBlueprint().Spec["configuration_schema"].(map[string]interface{})
 	configuration := map[string]interface{}{
-		"model": "local",
-		"dynamic_models": []interface{}{
-			map[string]interface{}{"key": "local", "display_name": "Local Model"},
-			"remote",
-		},
+		"model":          "local",
+		"dynamic_models": []interface{}{"local", "remote"},
 	}
 	if err := validateAgainstSchema(schema, configuration); err != nil {
-		t.Fatalf("rich and key dependency selections should satisfy launch schema: %v", err)
+		t.Fatalf("profile-key selections should satisfy launch schema: %v", err)
+	}
+	configuration["dynamic_models"] = []interface{}{map[string]interface{}{"key": "local"}}
+	if err := validateAgainstSchema(schema, configuration); err == nil {
+		t.Fatal("expanded public entries must be rejected")
 	}
 }
 
-func TestValidateDependencyAnnotation_PublicEntryRestrictions(t *testing.T) {
+func TestValidateDependencyAnnotation_SelectionShape(t *testing.T) {
 	tests := []struct {
 		name       string
 		annotation blueprintDependencyAnnotation
@@ -255,31 +251,22 @@ func TestValidateDependencyAnnotation_PublicEntryRestrictions(t *testing.T) {
 		want       string
 	}{
 		{
-			name: "unknown shape",
+			name: "single must be string",
 			annotation: blueprintDependencyAnnotation{
-				Selection: "multiple", ValueShape: "expanded", RequiredType: testLLMType,
+				Selection: "single", RequiredType: testLLMType,
 				Target: blueprintDependencyTarget{Kind: "runtime_catalog", CatalogKey: "models", DependencyKey: "llm"},
 			},
-			property: map[string]interface{}{"type": "array", "uniqueItems": true},
-			want:     "unsupported value_shape",
+			property: map[string]interface{}{"type": "array"},
+			want:     "single selection must be a string",
 		},
 		{
-			name: "single selection",
+			name: "multiple must be unique array",
 			annotation: blueprintDependencyAnnotation{
-				Selection: "single", ValueShape: dependencyValueShapePublicEntry, RequiredType: testLLMType,
+				Selection: "multiple", RequiredType: testLLMType,
 				Target: blueprintDependencyTarget{Kind: "runtime_catalog", CatalogKey: "models", DependencyKey: "llm"},
 			},
-			property: map[string]interface{}{"type": "string"},
-			want:     "multiple runtime catalog",
-		},
-		{
-			name: "agent dependency",
-			annotation: blueprintDependencyAnnotation{
-				Selection: "multiple", ValueShape: dependencyValueShapePublicEntry, RequiredType: testLLMType,
-				Target: blueprintDependencyTarget{Kind: "agent_dependency", AgentID: "agent", DependencyKey: "llm"},
-			},
-			property: map[string]interface{}{"type": "array", "uniqueItems": true},
-			want:     "multiple runtime catalog",
+			property: map[string]interface{}{"type": "array"},
+			want:     "multiple selection must be an array with uniqueItems",
 		},
 	}
 	for _, test := range tests {
@@ -325,7 +312,7 @@ local:
 	if err := spec.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
 	}
-	if err := materializeBlueprintDependencySelections(db, bp, &spec, map[string]interface{}{}, nil, configPath); err != nil {
+	if err := materializeBlueprintDependencySelections(db, bp, &spec, map[string]interface{}{}, configPath); err != nil {
 		t.Fatalf("optional annotated fields should be omittable: %v", err)
 	}
 	if _, exists := spec.Agents[0].DependencyMap["llm"]; exists {
@@ -336,7 +323,7 @@ local:
 	}
 
 	schema["required"] = []interface{}{"model"}
-	err = materializeBlueprintDependencySelections(db, bp, &spec, map[string]interface{}{}, nil, configPath)
+	err = materializeBlueprintDependencySelections(db, bp, &spec, map[string]interface{}{}, configPath)
 	if err == nil || !strings.Contains(err.Error(), `configuration field "model" is required`) {
 		t.Fatalf("missing required annotated field returned %v", err)
 	}
@@ -369,7 +356,7 @@ func testDependencyBlueprint() *store.Blueprint {
 		},
 	}
 	dynamicAnnotation := map[string]interface{}{
-		"selection": "multiple", "value_shape": "public_entry", "required_type": testLLMType,
+		"selection": "multiple", "required_type": testLLMType,
 		"filters": map[string]interface{}{"capabilities": []interface{}{"chat"}},
 		"target": map[string]interface{}{
 			"kind": "runtime_catalog", "catalog_key": "dynamic_models", "dependency_key": "llm",
@@ -384,10 +371,7 @@ func testDependencyBlueprint() *store.Blueprint {
 				"properties": map[string]interface{}{
 					"model": map[string]interface{}{"type": "string", dependencyAnnotationKey: annotation},
 					"dynamic_models": map[string]interface{}{
-						"type": "array", "items": map[string]interface{}{"oneOf": []interface{}{
-							map[string]interface{}{"type": "string"},
-							map[string]interface{}{"type": "object", "required": []interface{}{"key"}},
-						}}, "uniqueItems": true,
+						"type": "array", "items": map[string]interface{}{"type": "string"}, "uniqueItems": true,
 						dependencyAnnotationKey: dynamicAnnotation,
 					},
 				},
