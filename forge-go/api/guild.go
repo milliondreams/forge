@@ -136,9 +136,6 @@ func (s *Server) HandleGetHistoricalMessages(w http.ResponseWriter, r *http.Requ
 	broadcastTopic := "user_message_broadcast"
 
 	userIDs := []string{userID}
-	if s.localUI != nil && userID == s.localUI.user.ID && userID != localDummyUserID {
-		userIDs = append(userIDs, localDummyUserID)
-	}
 	var userMsgs []protocol.Message
 	for _, historyUserID := range userIDs {
 		userNotifTopic := fmt.Sprintf("user_notifications:%s", historyUserID)

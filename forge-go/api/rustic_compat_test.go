@@ -67,7 +67,7 @@ func TestTransformRusticMessage_ParticipantListUsesLegacyUIShape(t *testing.T) {
 	require.Equal(t, "bot", first["type"])
 }
 
-func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
+func TestRusticMessagesRoute_ShapesStudioEnvelope(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_PUBLIC_API", "false")
 	t.Setenv("FORGE_ENABLE_UI_API", "true")
 	t.Setenv("FORGE_IDENTITY_MODE", "local")
@@ -95,13 +95,13 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 	msg.ID = 999
 	msg.Format = "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionResponse"
 	msg.Payload = json.RawMessage(`{"choices":[{"message":{"content":"echo"}}]}`)
-	msg.Topics = protocol.TopicsFromString("user_notifications:dummyuserid")
+	msg.Topics = protocol.TopicsFromString("user_notifications:local-user-123")
 	msg.Priority = int(protocol.PriorityNormal)
 	msg.Thread = []uint64{999}
 	msg.MessageHistory = []protocol.ProcessEntry{}
 	msg.Normalize()
 
-	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:dummyuserid", &msg))
+	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:local-user-123", &msg))
 
 	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/local-user-123/messages", nil)
 	rr := httptest.NewRecorder()
