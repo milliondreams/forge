@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -20,26 +20,31 @@ import (
 	"github.com/rustic-ai/forge/forge-go/modelfit"
 	"github.com/rustic-ai/forge/forge-go/oauth"
 	"github.com/rustic-ai/forge/forge-go/protocol"
+	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/secrets"
 	"github.com/rustic-ai/forge/forge-go/supervisor"
 )
 
 type Server struct {
-	store          store.Store
-	statusStore    supervisor.AgentStatusStore
-	controlPusher  protocol.ControlPusher
-	msgClient      messaging.Backend
-	infraPublisher *infraevents.Publisher
-	fileStore      *filesystem.LocalFileStore
-	localUI        *localUIState
-	observeService *observeService
-	modelFit       *modelFitService
-	oauthManager   *oauth.Manager
-	oauthTokens    *oauth.CachedTokenStore
-	oauthClients   *oauth.CachedClientCredentialsStore
-	secretManager  *secrets.Manager
-	listenAddr     string
-	server         *http.Server
+	store              store.Store
+	statusStore        supervisor.AgentStatusStore
+	controlPusher      protocol.ControlPusher
+	msgClient          messaging.Backend
+	infraPublisher     *infraevents.Publisher
+	fileStore          *filesystem.LocalFileStore
+	localUI            *localUIState
+	observeService     *observeService
+	modelFit           *modelFitService
+	oauthManager       *oauth.Manager
+	oauthTokens        *oauth.CachedTokenStore
+	oauthClients       *oauth.CachedClientCredentialsStore
+	secretManager      *secrets.Manager
+	credentialRegistry *registry.Registry
+	launchPreflights   *launchPreflightCache
+	configurationError error
+	dataDir            string
+	listenAddr         string
+	server             *http.Server
 }
 
 func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlPusher protocol.ControlPusher, mc messaging.Backend, fs *filesystem.LocalFileStore, listenAddr string) *Server {
@@ -47,56 +52,45 @@ func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlP
 	if mc != nil {
 		infraPublisher, _ = infraevents.NewPublisher(mc)
 	}
-	localUI := newLocalUIState()
+	identity, identityErr := loadLocalIdentityFromEnvironment()
+	localUI := newLocalUIState(identity)
 	s := &Server{
-		store:          db,
-		statusStore:    statusStore,
-		controlPusher:  controlPusher,
-		msgClient:      mc,
-		infraPublisher: infraPublisher,
-		fileStore:      fs,
-		localUI:        localUI,
-		listenAddr:     listenAddr,
+		store:              db,
+		statusStore:        statusStore,
+		controlPusher:      controlPusher,
+		msgClient:          mc,
+		infraPublisher:     infraPublisher,
+		fileStore:          fs,
+		localUI:            localUI,
+		configurationError: identityErr,
+		dataDir:            forgepath.Resolve("data"),
+		listenAddr:         listenAddr,
 	}
-	migrateLegacyLocalGuildMemberships(db, localUI.user.ID)
 	return s
 }
 
-func migrateLegacyLocalGuildMemberships(db store.Store, userID string) {
-	if db == nil || userID == localDummyUserID {
-		return
+// WithDataDir records the configured Forge data root used by embedded agent
+// supervisors. Guild deletion uses the same root to remove Forge-owned agent
+// runtime directories after workloads have stopped.
+func (s *Server) WithDataDir(dataDir string) *Server {
+	if value := strings.TrimSpace(dataDir); value != "" {
+		s.dataDir = filepath.Clean(value)
 	}
+	return s
+}
 
-	legacyGuilds, err := db.GetGuildsForUser(localDummyUserID, nil, nil)
-	if err != nil {
-		slog.Warn("failed to read legacy local guild memberships", "err", err)
-		return
+// ValidateConfiguration rejects incomplete local identity configuration before
+// any HTTP listener or embedded client starts.
+func (s *Server) ValidateConfiguration() error {
+	if envString("FORGE_IDENTITY_MODE", "local") == "local" && s.configurationError != nil {
+		return fmt.Errorf("configure local identity: %w", s.configurationError)
 	}
-	for _, guild := range legacyGuilds {
-		users, err := db.GetUsersForGuild(guild.ID)
-		if err != nil {
-			slog.Warn("failed to read guild users during local identity migration", "guild_id", guild.ID, "err", err)
-			continue
-		}
-		alreadyMember := false
-		for _, existingUserID := range users {
-			if existingUserID == userID {
-				alreadyMember = true
-				break
-			}
-		}
-		if alreadyMember {
-			continue
-		}
-		if err := db.AddUserToGuild(guild.ID, userID); err != nil {
-			slog.Warn("failed to migrate local guild membership", "guild_id", guild.ID, "user_id", userID, "err", err)
-		}
-	}
+	return nil
 }
 
 // WithSecureStores initializes all managed credential persistence against the
-// OS keychain. The supplied provider is used only for launch-time reads and may
-// include explicitly requested unsafe read-only fallbacks.
+// OS keychain. The supplied provider is used only for launch-time reads of
+// organization-scoped storage keys; unscoped ambient names are never queried.
 func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	cfg, err := oauth.LoadProvidersConfig(forgepath.OAuthProvidersConfigPath())
 	if err != nil {
@@ -111,6 +105,25 @@ func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	// (name "Forge", uri omitted).
 	s.oauthManager = oauth.NewManagerWithStores(cfg, store, credStore,
 		oauth.WithDynamicClient(os.Getenv("FORGE_OAUTH_CLIENT_NAME"), os.Getenv("FORGE_OAUTH_CLIENT_URI")))
+	credentialRegistry, err := registry.Load("", s.oauthManager)
+	if err != nil {
+		return fmt.Errorf("load credential declarations from agent registry: %w", err)
+	}
+	profiles, err := loadConfiguredDependencyProfiles(dependencyConfigPath())
+	if err != nil {
+		return err
+	}
+	if err := validateCredentialCatalog(credentialRegistry, profiles); err != nil {
+		return fmt.Errorf("validate credential declarations: %w", err)
+	}
+	for key, profile := range profiles {
+		for _, requirement := range profile.Requirements.OAuth {
+			if err := s.oauthManager.ActivateProviderRequirements(requirement.Provider, requirement.Scopes); err != nil {
+				return fmt.Errorf("dependency profile %q OAuth requirements: %w", key, err)
+			}
+		}
+	}
+	s.credentialRegistry = credentialRegistry
 	keychain.SetOAuthManager(s.oauthManager)
 	secretStore := secrets.NewKeychainSecretStore()
 	metadata, ok := s.store.(secrets.MetadataIndex)
@@ -119,6 +132,16 @@ func (s *Server) WithSecureStores(provider *secrets.CachedProvider) error {
 	}
 	s.secretManager = secrets.NewManagerWithMetadata(secretStore, metadata, provider)
 	return nil
+}
+
+// ResolveAgentCredentialRequirements recomputes the exact Forge-owned
+// credential declaration for one persisted agent. The result is carried only
+// in the internal spawn envelope and is never written into AgentSpec.
+func (s *Server) ResolveAgentCredentialRequirements(agent *protocol.AgentSpec, configPath string) (protocol.CredentialRequirements, error) {
+	if s.credentialRegistry == nil {
+		return protocol.CredentialRequirements{}, fmt.Errorf("credential registry is not configured")
+	}
+	return ResolveAgentCredentialRequirements(agent, s.credentialRegistry, configPath)
 }
 
 func (s *Server) ClearSecureCaches() {
@@ -144,11 +167,14 @@ func (s *Server) SecretManager() *secrets.Manager {
 // ReadyDependencyProfiles evaluates the embedded node against the value-free
 // local secret metadata index, avoiding keychain reads during registration.
 func (s *Server) ReadyDependencyProfiles(configPath string) ([]string, error) {
+	if err := s.ValidateConfiguration(); err != nil {
+		return nil, err
+	}
 	if s.secretManager == nil {
 		return nil, fmt.Errorf("secret manager is not configured")
 	}
 	return ReadyDependencyProfileKeys(configPath, func(name string) (bool, error) {
-		return s.secretManager.Exists(localDummyOrgID, name), nil
+		return s.secretManager.Exists(s.localUI.org.ID, name), nil
 	})
 }
 
@@ -172,6 +198,9 @@ func (s *Server) WithModelFit(catalogPath, dependencyConfigPath string, profiler
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.ValidateConfiguration(); err != nil {
+		return err
+	}
 	gin.SetMode(gin.ReleaseMode)
 	router := s.buildRouter()
 

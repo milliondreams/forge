@@ -31,7 +31,6 @@ type AgentDependencyEntry struct {
 	AgentLevel    *bool   `json:"agent_level,omitempty"`
 	VariableName  *string `json:"variable_name,omitempty"`
 	RequiredType  *string `json:"required_type,omitempty"`
-	ResolvedType  *string `json:"resolved_type,omitempty"`
 }
 
 type ConfiguredDependencyEntry struct {
@@ -59,7 +58,6 @@ type BlueprintAgentDependencyEntry struct {
 	AgentLevel    *bool                       `json:"agent_level,omitempty"`
 	VariableName  *string                     `json:"variable_name,omitempty"`
 	RequiredType  *string                     `json:"required_type,omitempty"`
-	ResolvedType  *string                     `json:"resolved_type,omitempty"`
 	Providers     []ConfiguredDependencyEntry `json:"providers"`
 }
 

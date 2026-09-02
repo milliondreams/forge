@@ -131,7 +131,7 @@ func TestLevel1_EchoAgentIntegration(t *testing.T) {
 
 			// 4. Construct the environment variables for the Python agent runner.
 			secretProvider := secrets.NewEnvSecretProvider() // Use env provider for basic mock
-			envVars, err := envvars.BuildAgentEnv(ctx, &guildSpec, &agentSpec, entry, secretProvider, "")
+			envVars, err := envvars.BuildAgentEnv(ctx, &guildSpec, &agentSpec, entry.Requirements, secretProvider, "")
 			require.NoError(t, err)
 
 			env := append(envVars, "PYTHONUNBUFFERED=1")

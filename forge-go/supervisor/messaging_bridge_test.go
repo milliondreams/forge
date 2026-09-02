@@ -165,4 +165,5 @@ func (s *stubMessagingBackend) GetMessagesByID(_ context.Context, _ string, _ []
 func (s *stubMessagingBackend) Subscribe(_ context.Context, _ string, _ ...string) (messaging.Subscription, error) {
 	return nil, nil
 }
-func (s *stubMessagingBackend) Close() error { return nil }
+func (s *stubMessagingBackend) DeleteNamespace(_ context.Context, _ string) error { return nil }
+func (s *stubMessagingBackend) Close() error                                      { return nil }

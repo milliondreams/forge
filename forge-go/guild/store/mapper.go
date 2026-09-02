@@ -56,7 +56,7 @@ func jsonbToStruct[T any](j JSONB) *T {
 	return &v
 }
 
-func FromGuildSpec(spec *protocol.GuildSpec, organizationID string) *GuildModel {
+func FromGuildSpec(spec *protocol.GuildSpec, organizationID, createdBy string) *GuildModel {
 	spec.Normalize()
 
 	execEngine := "rustic_ai.core.guild.execution.sync.sync_exec_engine.SyncExecutionEngine"
@@ -85,6 +85,7 @@ func FromGuildSpec(spec *protocol.GuildSpec, organizationID string) *GuildModel 
 		Name:            spec.Name,
 		Description:     spec.Description,
 		OrganizationID:  organizationID,
+		CreatedBy:       createdBy,
 		ExecutionEngine: execEngine,
 		BackendModule:   backendModule,
 		BackendClass:    backendClass,

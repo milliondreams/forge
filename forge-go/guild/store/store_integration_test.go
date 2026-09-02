@@ -39,7 +39,7 @@ func TestStore_AllE2ERoundtrip(t *testing.T) {
 			}
 
 			// 3. Map Domain Spec -> GORM Model
-			model := store.FromGuildSpec(spec, "org-foo")
+			model := store.FromGuildSpec(spec, "org-foo", "user-foo")
 
 			// 4. Save to SQLite
 			if err := db.CreateGuild(model); err != nil {

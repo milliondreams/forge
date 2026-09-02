@@ -10,6 +10,7 @@ import (
 	"mime"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -307,6 +308,51 @@ func (s *LocalFileStore) Delete(
 		return err
 	}
 
+	return nil
+}
+
+// DeleteGuildPrefix deletes every object under the canonical organization and
+// guild prefix for one configured filesystem backend. Sibling guild prefixes
+// and objects outside Forge's canonical scope are never touched.
+func (s *LocalFileStore) DeleteGuildPrefix(ctx context.Context, cfg DependencyConfig, orgID, guildID string) error {
+	scope, err := s.resolver.ResolveScope(cfg, orgID, guildID, GuildGlobalScope)
+	if err != nil {
+		return err
+	}
+	scope.ObjectPath = path.Dir(scope.ObjectPath)
+	prefix := prefixWithSlash(scope.ObjectPath)
+	if prefix == "" || prefix == "/" || prefix == "./" {
+		return fmt.Errorf("refusing to delete unsafe guild filesystem prefix")
+	}
+	bucket, err := s.openBucket(ctx, scope)
+	if err != nil {
+		return err
+	}
+	iter := bucket.List(&blob.ListOptions{Prefix: prefix})
+	for {
+		obj, nextErr := iter.Next(ctx)
+		if errors.Is(nextErr, iterator.Done) || errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return fmt.Errorf("list guild filesystem prefix: %w", nextErr)
+		}
+		if obj != nil {
+			if err := bucket.Delete(ctx, obj.Key); err != nil {
+				return fmt.Errorf("delete guild filesystem object: %w", err)
+			}
+		}
+	}
+	if scope.Protocol == "file" {
+		target := filepath.Clean(filepath.Join(scope.LocalRoot, filepath.FromSlash(scope.ObjectPath)))
+		rel, err := filepath.Rel(filepath.Clean(scope.LocalRoot), target)
+		if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return fmt.Errorf("refusing to delete unsafe local guild directory")
+		}
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("delete local guild directory: %w", err)
+		}
+	}
 	return nil
 }
 

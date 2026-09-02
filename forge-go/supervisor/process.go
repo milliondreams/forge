@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -28,16 +29,18 @@ import (
 )
 
 type ProcessSupervisor struct {
-	mu               sync.RWMutex
-	agents           map[string]*ManagedAgent
-	bridges          map[string]*AgentMessagingBridge
-	statusStore      AgentStatusStore
-	msgBackend       messaging.Backend
-	infraPublisher   *infraevents.Publisher
-	workDirBase      string
-	orgID            string
-	defaultTransport protocol.AgentTransportMode
-	detachGroup      bool
+	mu                     sync.RWMutex
+	agents                 map[string]*ManagedAgent
+	bridges                map[string]*AgentMessagingBridge
+	statusStore            AgentStatusStore
+	msgBackend             messaging.Backend
+	infraPublisher         *infraevents.Publisher
+	workDirBase            string
+	orgID                  string
+	defaultTransport       protocol.AgentTransportMode
+	detachGroup            bool
+	terminationGracePeriod time.Duration
+	terminationKillWait    time.Duration
 }
 
 type ProcessSupervisorOption func(*ProcessSupervisor)
@@ -62,6 +65,13 @@ func WithAttachedProcessTree() ProcessSupervisorOption {
 	}
 }
 
+func withProcessTerminationTimeouts(gracePeriod, killWait time.Duration) ProcessSupervisorOption {
+	return func(p *ProcessSupervisor) {
+		p.terminationGracePeriod = gracePeriod
+		p.terminationKillWait = killWait
+	}
+}
+
 func WithDefaultAgentTransport(mode string) ProcessSupervisorOption {
 	return func(p *ProcessSupervisor) {
 		p.defaultTransport = protocol.NormalizeAgentTransportMode(mode)
@@ -82,13 +92,15 @@ func WithInfraEventPublisher(pub *infraevents.Publisher) ProcessSupervisorOption
 
 func NewProcessSupervisor(statusStore AgentStatusStore, opts ...ProcessSupervisorOption) *ProcessSupervisor {
 	p := &ProcessSupervisor{
-		agents:           make(map[string]*ManagedAgent),
-		bridges:          make(map[string]*AgentMessagingBridge),
-		statusStore:      statusStore,
-		workDirBase:      resolveProcessWorkDirBase(""),
-		orgID:            "default-org",
-		defaultTransport: protocol.AgentTransportDirect,
-		detachGroup:      true,
+		agents:                 make(map[string]*ManagedAgent),
+		bridges:                make(map[string]*AgentMessagingBridge),
+		statusStore:            statusStore,
+		workDirBase:            resolveProcessWorkDirBase(""),
+		orgID:                  "default-org",
+		defaultTransport:       protocol.AgentTransportDirect,
+		detachGroup:            true,
+		terminationGracePeriod: processTerminationGracePeriod,
+		terminationKillWait:    processTerminationKillWait,
 	}
 
 	for _, opt := range opts {
@@ -147,7 +159,11 @@ func (p *ProcessSupervisor) startProcess(ctx context.Context, guildID string, ag
 		return fmt.Errorf("runtimeCmd is empty")
 	}
 
-	cmd := exec.CommandContext(ctx, runtimeCmd[0], runtimeCmd[1:]...)
+	// A spawn/request context controls launch preparation, not the lifetime of
+	// the resulting workload. The supervisor exclusively owns process shutdown;
+	// tying the command to this context races automatic cancellation against
+	// Stop/StopAll and sends duplicate signals to agents.
+	cmd := exec.Command(runtimeCmd[0], runtimeCmd[1:]...)
 
 	workDir, err := p.ensureAgentWorkDir(guildID, agent.ID)
 	if err != nil {
@@ -227,6 +243,7 @@ func (p *ProcessSupervisor) startProcess(ctx context.Context, guildID string, ag
 	telemetry.ObserveSupervisorBootDuration("local-node", "process", time.Since(startBootTime))
 
 	agent.SetPID(cmd.Process.Pid)
+	agent.SetProcessGroupID(processGroupID(cmd.Process.Pid))
 	agent.SetState(StateRunning)
 	_ = p.emitProcessEvent(ctx, guildID, agent.ID, "agent.process.started", infraevents.SeverityInfo, "agent process started", nil, map[string]any{
 		"pid": cmd.Process.Pid,
@@ -393,14 +410,30 @@ func (p *ProcessSupervisor) monitorProcess(guildID string, agent *ManagedAgent, 
 	telemetry.AddAgentExitCode(guildID, agent.ID, "local-node", exitCode)
 
 	if agent.IsStopRequested() {
-		agent.SetState(StateStopped)
-		_ = p.emitProcessEvent(ctx, guildID, agent.ID, "agent.process.stopped", infraevents.SeverityInfo, "agent process stopped", nil, map[string]any{
-			"exit_code": exitCode,
-		})
-		if p.statusStore != nil {
-			_ = p.statusStore.DeleteStatus(ctx, guildID, agent.ID)
-		}
+		// Stop owns the terminal transition. The launcher can exit before a
+		// descendant, so the process group must be drained before the agent is
+		// reported as stopped.
 		return
+	}
+
+	processGroupID := agent.GetProcessGroupID()
+	if processGroupID > 0 {
+		if cleanupErr := terminateProcessTreeWithTimeout(
+			0,
+			processGroupID,
+			p.detachGroup,
+			p.terminationGracePeriod,
+			p.terminationKillWait,
+		); cleanupErr != nil {
+			agent.SetState(StateFailed)
+			agent.LastError = cleanupErr
+			_ = p.emitProcessEvent(ctx, guildID, agent.ID, "agent.process.failed", infraevents.SeverityError, "agent process tree survived launcher exit", nil, map[string]any{
+				"error":            cleanupErr.Error(),
+				"process_group_id": processGroupID,
+			})
+			return
+		}
+		agent.ClearProcessGroupID()
 	}
 
 	_ = p.emitProcessEvent(ctx, guildID, agent.ID, "agent.process.exited", infraevents.SeverityWarn, "agent process exited", nil, map[string]any{
@@ -477,18 +510,52 @@ func (p *ProcessSupervisor) Stop(ctx context.Context, guildID, agentID string) e
 
 	agent.RequestStop()
 	pid := agent.GetPID()
+	processGroupID := agent.GetProcessGroupID()
+	startedAt := time.Now()
+	slog.Info("stopping owned agent process tree",
+		"guild_id", normalizeGuildID(guildID),
+		"agent_id", agentID,
+		"pid", pid,
+		"process_group_id", processGroupID,
+	)
 
-	if pid > 0 {
-		_ = terminateProcessTree(pid, p.detachGroup)
+	if pid > 0 || processGroupID > 0 {
+		if err := terminateProcessTreeWithTimeout(
+			pid,
+			processGroupID,
+			p.detachGroup,
+			p.terminationGracePeriod,
+			p.terminationKillWait,
+		); err != nil {
+			slog.Error("owned agent process tree shutdown failed",
+				"guild_id", normalizeGuildID(guildID),
+				"agent_id", agentID,
+				"pid", pid,
+				"process_group_id", processGroupID,
+				"duration", time.Since(startedAt),
+				"error", err,
+			)
+			return err
+		}
 		if err := waitForAgentExit(ctx, agent, pid); err != nil {
 			return err
 		}
 	}
+	agent.ClearProcessGroupID()
+	agent.SetState(StateStopped)
+	_ = p.emitProcessEvent(ctx, guildID, agent.ID, "agent.process.stopped", infraevents.SeverityInfo, "agent process stopped", nil, nil)
 
 	if p.statusStore != nil {
 		_ = p.statusStore.DeleteStatus(ctx, agent.GuildID, agent.ID)
 		_ = p.statusStore.DeleteStatus(ctx, unknownGuildKey, agent.ID)
 	}
+	slog.Info("owned agent process tree stopped",
+		"guild_id", normalizeGuildID(guildID),
+		"agent_id", agentID,
+		"pid", pid,
+		"process_group_id", processGroupID,
+		"duration", time.Since(startedAt),
+	)
 
 	return nil
 }
@@ -501,7 +568,7 @@ func waitForAgentExit(ctx context.Context, agent *ManagedAgent, pid int) error {
 	defer ticker.Stop()
 
 	for {
-		if !processExists(pid) || agent.GetPID() == 0 {
+		if pid <= 0 || !processExists(pid) || agent.GetPID() == 0 {
 			return nil
 		}
 
@@ -564,17 +631,27 @@ func (p *ProcessSupervisor) StopAll(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	var firstErr error
+	errCh := make(chan error, len(agents))
+	var wg sync.WaitGroup
 	for _, agent := range agents {
-		if err := p.Stop(ctx, agent.GuildID, agent.ID); err != nil {
-			slog.Warn("failed to stop agent", "guild_id", agent.GuildID, "agent_id", agent.ID, "error", err)
-			if firstErr == nil {
-				firstErr = err
+		agent := agent
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.Stop(ctx, agent.GuildID, agent.ID); err != nil {
+				slog.Warn("failed to stop agent", "guild_id", agent.GuildID, "agent_id", agent.ID, "error", err)
+				errCh <- err
 			}
-		}
+		}()
 	}
+	wg.Wait()
+	close(errCh)
 
-	return firstErr
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func (p *ProcessSupervisor) setBridge(guildID, agentID string, bridge *AgentMessagingBridge) {

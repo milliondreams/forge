@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -79,6 +81,16 @@ func TestLaunchBlueprint_RendersConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register agent: %v", err)
 	}
+	registryPath := filepath.Join(t.TempDir(), "agent-registry.yaml")
+	if err := os.WriteFile(registryPath, []byte(`entries:
+  - id: SimpleAgentWithProps
+    class_name: test.agents.SimpleAgentWithProps
+    runtime: binary
+    executable: test-agent
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FORGE_AGENT_REGISTRY", registryPath)
 
 	mux := http.NewServeMux()
 	RegisterCatalogRoutes(mux, db)
@@ -118,12 +130,29 @@ func TestLaunchBlueprint_RendersConfiguration(t *testing.T) {
 	// override and returns the launched guild spec read back from the store.
 	launch := func(t *testing.T, cfg map[string]any) *protocol.GuildSpec {
 		t.Helper()
-		body, _ := json.Marshal(LaunchGuildFromBlueprintRequest{
+		guildID := "guild-" + strings.ReplaceAll(t.Name(), "/", "-")
+		launchRequest := LaunchGuildFromBlueprintRequest{
+			GuildID:       &guildID,
 			GuildName:     "Launched Guild",
 			UserID:        "user-1",
 			OrgID:         "org-1",
 			Configuration: cfg,
-		})
+		}
+		body, _ := json.Marshal(launchRequest)
+		preflightReq, _ := http.NewRequest("POST", "/catalog/blueprints/"+created.ID+"/guilds/preflight", bytes.NewBuffer(body))
+		preflightReq.Header.Set("Content-Type", "application/json")
+		preflightRecorder := httptest.NewRecorder()
+		mux.ServeHTTP(preflightRecorder, preflightReq)
+		if preflightRecorder.Code != http.StatusOK {
+			t.Fatalf("preflight: want 200, got %d: %s", preflightRecorder.Code, preflightRecorder.Body.String())
+		}
+		var preflight LaunchPreflightResponse
+		if err := json.NewDecoder(preflightRecorder.Body).Decode(&preflight); err != nil {
+			t.Fatal(err)
+		}
+		launchRequest.PreflightID = preflight.ID
+		launchRequest.Fingerprint = preflight.Fingerprint
+		body, _ = json.Marshal(launchRequest)
 		lreq, _ := http.NewRequest("POST", "/catalog/blueprints/"+created.ID+"/guilds", bytes.NewBuffer(body))
 		lreq.Header.Set("Content-Type", "application/json")
 		lrr := httptest.NewRecorder()
@@ -195,13 +224,15 @@ func TestLaunchBlueprint_RendersConfiguration(t *testing.T) {
 	})
 
 	t.Run("ill-typed configuration override is rejected", func(t *testing.T) {
+		guildID := "invalid-configuration"
 		body, _ := json.Marshal(LaunchGuildFromBlueprintRequest{
+			GuildID:       &guildID,
 			GuildName:     "Launched Guild",
 			UserID:        "user-1",
 			OrgID:         "org-1",
 			Configuration: map[string]any{"agent1": 7}, // schema says string
 		})
-		lreq, _ := http.NewRequest("POST", "/catalog/blueprints/"+created.ID+"/guilds", bytes.NewBuffer(body))
+		lreq, _ := http.NewRequest("POST", "/catalog/blueprints/"+created.ID+"/guilds/preflight", bytes.NewBuffer(body))
 		lreq.Header.Set("Content-Type", "application/json")
 		lrr := httptest.NewRecorder()
 		mux.ServeHTTP(lrr, lreq)

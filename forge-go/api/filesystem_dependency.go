@@ -6,6 +6,7 @@ import (
 
 	"github.com/rustic-ai/forge/forge-go/filesystem"
 	"github.com/rustic-ai/forge/forge-go/guild/store"
+	"github.com/rustic-ai/forge/forge-go/protocol"
 )
 
 func (s *Server) resolveFilesystemDependency(guildID string) (string, filesystem.DependencyConfig, int, error) {
@@ -21,6 +22,17 @@ func (s *Server) resolveFilesystemDependency(guildID string) (string, filesystem
 		return "", filesystem.DependencyConfig{}, 404, fmt.Errorf("dependency for filesystem not configured for guild %s", guildID)
 	}
 
+	cfg := filesystemConfigFromDependency(depSpec)
+
+	orgID := strings.TrimSpace(guildModel.OrganizationID)
+	if orgID == "" {
+		orgID = guildID
+	}
+
+	return orgID, cfg, 200, nil
+}
+
+func filesystemConfigFromDependency(depSpec protocol.DependencySpec) filesystem.DependencyConfig {
 	cfg := filesystem.DependencyConfig{
 		ClassName:      depSpec.ClassName,
 		Protocol:       "file",
@@ -41,10 +53,5 @@ func (s *Server) resolveFilesystemDependency(guildID string) (string, filesystem
 		cfg.StorageOptions = map[string]any{}
 	}
 
-	orgID := strings.TrimSpace(guildModel.OrganizationID)
-	if orgID == "" {
-		orgID = guildID
-	}
-
-	return orgID, cfg, 200, nil
+	return cfg
 }

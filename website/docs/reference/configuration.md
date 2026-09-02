@@ -58,6 +58,20 @@ Forge reads four YAML config files. None of them are stored under `~/.forge` by 
 
 Declares, per dependency class, what runtime resources an agent needs and how they're satisfied — this is the source that `filesystem.DependencyConfig` (path base, protocol, storage options) is built from per guild. Loaded from `FORGE_DEPENDENCY_CONFIG` (default `conf/agent-dependencies.yaml`).
 
+Configuration ownership depends on the deployment:
+
+- a standalone or distributed Forge operator owns this file and supplies the
+  same profile keys to the server and eligible clients;
+- Rustic Studio desktop may generate a separate effective runtime file for its
+  bundled Forge without overwriting persistent user configuration;
+- hosted Rustic UI never reads or writes this file and only consumes the
+  read-only `/rustic/dependencies` catalog exposed by external Forge.
+
+An endpoint inside a dependency profile is used by the spawned agent process.
+It must be reachable from the agent worker's network namespace; `localhost`
+does not automatically refer to the Forge control plane. See
+[Rustic UI with External Forge](../guides/rustic-ui-external-forge.md).
+
 ### `local-model-catalog.yaml`
 
 Describes locally runnable model entries used by the model-fit/local-model subsystem (which local LLM binaries and weights are available, and what hardware they need). Loaded from `FORGE_LOCAL_MODEL_CATALOG` (default `conf/local-model-catalog.yaml`).
@@ -132,7 +146,6 @@ The `--db` DSN itself isn't an env var, but `FORGE_DATABASE_URL` (documented und
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUSTIC_AI_REDIS_MSG_TTL` | `3600` (seconds) | TTL for Redis-backed message history entries. |
-| `RUSTIC_AI_NATS_MSG_TTL` | `3600` (seconds) | TTL for NATS JetStream message history (60 days for topics matching `user_notifications:` / `user_message_broadcast`, regardless of this value). |
 | `RUSTIC_AI_MESSAGING_MODULE` | — | Python messaging backend module the server tells agents to use (e.g. `rustic_ai.nats.messaging.backend`). |
 | `RUSTIC_AI_MESSAGING_CLASS` | — | Python messaging backend class (e.g. `NATSMessagingBackend`). |
 | `RUSTIC_AI_MESSAGING_BACKEND_CONFIG` | — | JSON backend config consumed by guild bootstrap. |
@@ -149,7 +162,11 @@ See [Messaging](../concepts/messaging-protocol/) for how these map onto Redis/NA
 | `FORGE_OAUTH_PROVIDERS_CONFIG` | `conf/oauth-providers.yaml` | Path to the OAuth providers YAML. |
 | `FORGE_KEYCHAIN_SERVICE` | `forge` | OS keychain service name used by both the keychain secret provider and the keychain token store. |
 | `FORGE_MANAGER_API_BASE_URL` | — | Externally reachable base URL used to build OAuth callback URLs. |
-| `FORGE_IDENTITY_MODE` | — | Identity mode for the manager surface. |
+| `FORGE_IDENTITY_MODE` | `local` | Identity mode for the manager surface. Local mode requires explicit local user and organization IDs. |
+| `FORGE_LOCAL_USER_ID` | — | Required safe user ID when `FORGE_IDENTITY_MODE=local`. |
+| `FORGE_LOCAL_USER_NAME` | `Anonymous User` | Display name for the local user. |
+| `FORGE_LOCAL_ORGANIZATION_ID` | — | Required safe organization ID when `FORGE_IDENTITY_MODE=local`. |
+| `FORGE_LOCAL_ORGANIZATION_NAME` | `Local` | Display name for the local organization. |
 | `FORGE_QUOTA_MODE` | — | Quota enforcement mode. |
 
 Full detail on the secret chain, OAuth PKCE flow, and keychain bridging is in [Secrets & OAuth](../features/secrets-oauth/).

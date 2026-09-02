@@ -6,23 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"sort"
 
 	"github.com/rustic-ai/forge/forge-go/forgepath"
 	"github.com/rustic-ai/forge/forge-go/oauth"
 	"github.com/rustic-ai/forge/forge-go/protocol"
-	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/secrets"
 )
 
-// BuildAgentEnv constructs the full set of environment variables for a Forge agent process.
-// It merges the parent process environment with Forge-specific configuration.
+// MissingCredentialError identifies a mandatory credential that was not
+// available when Forge prepared an agent process environment.
+type MissingCredentialError struct {
+	Kind string
+	Name string
+}
+
+func (e *MissingCredentialError) Error() string {
+	return fmt.Sprintf("mandatory %s credential %q is not configured", e.Kind, e.Name)
+}
+
+// BuildAgentEnv constructs the allowlisted environment for a Forge agent
+// process. Only Forge runtime settings and credentials resolved from the
+// authoritative requirement set are included.
 func BuildAgentEnv(
 	ctx context.Context,
 	guildSpec *protocol.GuildSpec,
 	agentSpec *protocol.AgentSpec,
-	regEntry *registry.AgentRegistryEntry,
+	requirements protocol.CredentialRequirements,
 	secretProvider secrets.SecretProvider,
 	orgID string,
 ) ([]string, error) {
@@ -111,7 +121,7 @@ func BuildAgentEnv(
 		envMap["FORGE_CLIENT_PROPERTIES_JSON"] = "{}"
 	}
 
-	if err := resolveSecrets(ctx, agentSpec, regEntry, secretProvider, orgID, envMap); err != nil {
+	if err := resolveSecrets(ctx, agentSpec, requirements, secretProvider, orgID, envMap); err != nil {
 		return nil, err
 	}
 
@@ -154,69 +164,50 @@ func BuildAgentEnv(
 func resolveSecrets(
 	ctx context.Context,
 	agentSpec *protocol.AgentSpec,
-	regEntry *registry.AgentRegistryEntry,
+	requirements protocol.CredentialRequirements,
 	secretProvider secrets.SecretProvider,
 	orgID string,
 	envMap map[string]string,
 ) error {
-	type requirement struct {
-		labels   []string
-		required bool
+	requirements.Normalize()
+	if err := requirements.Validate(); err != nil {
+		return fmt.Errorf("invalid credential requirements for agent %q: %w", agentSpec.ID, err)
 	}
-	requirements := make(map[string]*requirement)
-	add := func(key, label string, required bool) {
-		req := requirements[key]
-		if req == nil {
-			req = &requirement{}
-			requirements[key] = req
-		}
-		if !slices.Contains(req.labels, label) {
-			req.labels = append(req.labels, label)
-		}
-		req.required = req.required || required
-	}
-	for _, key := range agentSpec.Resources.Secrets {
-		add(key, key, false)
-	}
-	if regEntry != nil {
-		for _, secret := range regEntry.Secrets {
-			add(secret.Key, secret.Label, secret.Optional != nil && !*secret.Optional)
-		}
-	}
-
-	keys := make([]string, 0, len(requirements))
-	for key := range requirements {
-		keys = append(keys, key)
+	keys := make([]string, 0, len(requirements.Secrets))
+	byKey := make(map[string]protocol.SecretNeed, len(requirements.Secrets))
+	for _, requirement := range requirements.Secrets {
+		keys = append(keys, requirement.Key)
+		byKey[requirement.Key] = requirement
 	}
 	sort.Strings(keys)
 	values, failures := resolveStaticSecretBatch(ctx, secretProvider, orgID, keys)
 	for _, key := range keys {
-		req := requirements[key]
+		requirement := byKey[key]
 		if err := failures[key]; err != nil {
-			if errors.Is(err, secrets.ErrSecretNotFound) && !req.required {
-				continue
+			if errors.Is(err, secrets.ErrSecretNotFound) {
+				if requirement.Optional != nil && *requirement.Optional {
+					continue
+				}
+				return &MissingCredentialError{Kind: "secret", Name: key}
 			}
 			return fmt.Errorf("failed to resolve secret '%s' for agent '%s': %w", key, agentSpec.ID, err)
 		}
-		for _, label := range req.labels {
-			envMap[label] = values[key]
-		}
+		envMap[requirement.Env] = values[key]
 	}
 
-	if regEntry == nil {
-		return nil
-	}
-
-	for _, o := range regEntry.OAuth {
+	for _, o := range requirements.OAuth {
 		secretKey := oauth.StoreKey(orgID, o.Provider)
 		val, err := secretProvider.Resolve(ctx, secretKey)
 		if err != nil {
-			if errors.Is(err, secrets.ErrSecretNotFound) && (o.Optional == nil || *o.Optional) {
-				continue
+			if errors.Is(err, secrets.ErrSecretNotFound) {
+				if o.Optional != nil && *o.Optional {
+					continue
+				}
+				return &MissingCredentialError{Kind: "oauth", Name: o.Provider}
 			}
 			return fmt.Errorf("failed to resolve OAuth token for provider '%s', agent '%s': %w", o.Provider, agentSpec.ID, err)
 		}
-		envMap[o.Label] = val
+		envMap[o.Env] = val
 	}
 
 	return nil
@@ -245,7 +236,6 @@ func resolveStaticSecretBatch(ctx context.Context, provider secrets.SecretProvid
 	} else {
 		scopedValues, scopedFailures = resolveIndividually(ctx, provider, scopedKeys)
 	}
-	fallbackKeys := make([]string, 0)
 	for scoped, key := range scopedToRaw {
 		if value, ok := scopedValues[scoped]; ok {
 			values[key] = value
@@ -256,22 +246,7 @@ func resolveStaticSecretBatch(ctx context.Context, provider secrets.SecretProvid
 			failures[key] = err
 			continue
 		}
-		fallbackKeys = append(fallbackKeys, key)
-	}
-
-	var fallbackValues map[string]string
-	var fallbackFailures map[string]error
-	if supportsBatch {
-		fallbackValues, fallbackFailures = batch.ResolveBatch(ctx, fallbackKeys)
-	} else {
-		fallbackValues, fallbackFailures = resolveIndividually(ctx, provider, fallbackKeys)
-	}
-	for _, key := range fallbackKeys {
-		if value, ok := fallbackValues[key]; ok {
-			values[key] = value
-		} else {
-			failures[key] = fallbackFailures[key]
-		}
+		failures[key] = secrets.ErrSecretNotFound
 	}
 	return values, failures
 }

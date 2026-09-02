@@ -30,6 +30,7 @@ func TestHandleFileUploadAndDownload(t *testing.T) {
 			Properties:  map[string]any{},
 		},
 		OrganizationID: "org-1",
+		UserID:         "user-1",
 	}
 	createBody, err := json.Marshal(createReq)
 	require.NoError(t, err)
@@ -210,6 +211,7 @@ func createGuildWithFilesystemDependency(t *testing.T, mux *http.ServeMux, guild
 			},
 		},
 		OrganizationID: "org-1",
+		UserID:         "user-1",
 	}
 
 	createBody, err := json.Marshal(createReq)

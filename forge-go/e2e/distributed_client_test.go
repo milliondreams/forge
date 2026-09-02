@@ -195,8 +195,9 @@ agents:
 	}), "client node did not register with server")
 
 	launchBody, _ := json.Marshal(map[string]interface{}{
-		"spec":   parsedSpec,
-		"org_id": "e2e-org",
+		"spec":    parsedSpec,
+		"org_id":  "e2e-org",
+		"user_id": "e2e-user",
 	})
 	launchResp, err := http.Post(baseURL+"/api/guilds", "application/json", bytes.NewBuffer(launchBody))
 	require.NoError(t, err)

@@ -236,6 +236,10 @@ func (r *GuildRuntime) Start() error {
 		"FORGE_ENABLE_PUBLIC_API=true",
 		"FORGE_ENABLE_UI_API=true",
 		"FORGE_IDENTITY_MODE=local",
+		"FORGE_LOCAL_USER_ID="+r.config.UserID,
+		"FORGE_LOCAL_USER_NAME="+r.config.UserName,
+		"FORGE_LOCAL_ORGANIZATION_ID="+r.config.OrgID,
+		"FORGE_LOCAL_ORGANIZATION_NAME=Local",
 		"FORGE_QUOTA_MODE=local",
 		"PYTHONUNBUFFERED=1",
 	)

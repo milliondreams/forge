@@ -170,6 +170,7 @@ def test_agent_runner_lenient_agent_spec_with_guild_spec_props(monkeypatch):
                 "guild_spec": json.loads(guild_json),
                 "manager_api_base_url": "http://127.0.0.1:9090",
                 "organization_id": "org-1",
+                "created_by": "user-1",
             },
         }
     )

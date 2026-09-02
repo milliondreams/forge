@@ -23,9 +23,6 @@ entries:
     description: Google Search grounding agent
     runtime: uvx
     package: rusticai-vertexai
-    secrets:
-      - VERTEXAI_PROJECT
-      - VERTEXAI_LOCATION
   - id: ContentModerationAgent
     class_name: rustic_ai.vertexai.agents.content_moderation.ContentModerationAgent
     description: Vertex AI content moderation
@@ -33,17 +30,11 @@ entries:
     package: rusticai-vertexai
     with_dependencies:
       - pandas
-    secrets:
-      - VERTEXAI_PROJECT
-      - VERTEXAI_LOCATION
   - id: VertexAiImagenAgent
     class_name: rustic_ai.vertexai.agents.image_generation.VertexAiImagenAgent
     description: Vertex AI Imagen generation
     runtime: uvx
     package: rusticai-vertexai
-    secrets:
-      - VERTEXAI_PROJECT
-      - VERTEXAI_LOCATION
   - id: LLMAgent
     class_name: rustic_ai.llm_agent.llm_agent.LLMAgent
     description:
@@ -65,8 +56,12 @@ entries:
     description: Claude specialized coding agent
     runtime: uvx
     package: rusticai-claude
-    secrets:
-      - ANTHROPIC_API_KEY
+    requirements:
+      secrets:
+        - key: ANTHROPIC_API_KEY
+          env: ANTHROPIC_API_KEY
+          label: Anthropic API Key
+          optional: false
   - id: MCPAgent
     class_name: rustic_ai.mcp.agent.MCPAgent
     description: Model Context Protocol Agent
@@ -77,17 +72,17 @@ entries:
     description: SERP API Web Search Agent
     runtime: uvx
     package: rusticai-serpapi
-    secrets:
-      - SERPAPI_API_KEY
+    requirements:
+      secrets:
+        - key: SERP_API_KEY
+          env: SERP_API_KEY
+          label: SERP API Key
+          optional: false
   - id: LiteLLMAgent
     class_name: rustic_ai.litellm.agent.LiteLLMAgent
     description: Provider-agnostic LLM Agent via LiteLLM router
     runtime: uvx
     package: rusticai-litellm
-    secrets:
-      - LITELLM_API_KEY
-      - OPENAI_API_KEY
-      - ANTHROPIC_API_KEY
   - id: PlaywrightScraperAgent
     class_name: rustic_ai.playwright.agent.PlaywrightScraperAgent
     description: Headless browser scraping agent

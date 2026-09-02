@@ -99,6 +99,7 @@ func TestHandleCreateGuild_NATS(t *testing.T) {
 			},
 		},
 		OrganizationID: "org-nats-123",
+		UserID:         "user-nats-123",
 	}
 
 	body, err := json.Marshal(reqPayload)
@@ -135,6 +136,7 @@ func TestHandleRelaunchGuild_EnqueuesWhenManagerNotRunning_NATS(t *testing.T) {
 		Name:           "Relaunch Guild NATS",
 		Description:    "test",
 		OrganizationID: "org-1",
+		CreatedBy:      "user-1",
 		BackendConfig:  store.JSONB{},
 		DependencyMap:  store.JSONB{},
 		Status:         store.GuildStatusRequested,

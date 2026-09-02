@@ -47,11 +47,12 @@ class ManagerMetastoreClient:
         self.close()
 
     def ensure_guild(
-        self, guild_spec: GuildSpec, organization_id: str
+        self, guild_spec: GuildSpec, organization_id: str, created_by: str
     ) -> dict[str, Any]:
         payload = {
             "guild_spec": guild_spec.model_dump(mode="json", exclude_none=True),
             "organization_id": organization_id,
+            "created_by": created_by,
         }
         return self._request("POST", "/manager/guilds/ensure", json=payload)
 
@@ -64,9 +65,18 @@ class ManagerMetastoreClient:
         payload = {"status": _enum_wire_value(status)}
         return self._request("PATCH", f"/manager/guilds/{gid}/status", json=payload)
 
-    def ensure_agent(self, guild_id: str, agent_spec: AgentSpec) -> dict[str, Any]:
+    def ensure_agent(
+        self,
+        guild_id: str,
+        agent_spec: AgentSpec,
+        dependency_profiles: list[str] | None = None,
+    ) -> dict[str, Any]:
         gid = quote(guild_id, safe="")
-        payload = agent_spec.model_dump(mode="json", exclude_none=True)
+        payload = {
+            "version": "1",
+            "agent_spec": agent_spec.model_dump(mode="json", exclude_none=True),
+            "dependency_profiles": dependency_profiles or [],
+        }
         return self._request(
             "POST", f"/manager/guilds/{gid}/agents/ensure", json=payload
         )

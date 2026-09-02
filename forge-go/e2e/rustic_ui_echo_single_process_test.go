@@ -26,12 +26,13 @@ import (
 const rusticUIEchoBlueprintName = "Simple Echo"
 
 type singleProcessForgeServer struct {
-	publicBase string
-	rusticBase string
-	wsBase     string
-	redisAddr  string
-	stdout     *bytes.Buffer
-	stderr     *bytes.Buffer
+	publicBase         string
+	rusticBase         string
+	wsBase             string
+	redisAddr          string
+	stdout             *bytes.Buffer
+	stderr             *bytes.Buffer
+	agentProcessGroups []int
 }
 
 type wsReadEvent struct {
@@ -135,7 +136,7 @@ func TestE2E_RusticUIEchoLaunchSingleProcess(t *testing.T) {
 	require.True(t, senderIsEchoAgent(echoMsg), "expected echo response from Echo Agent")
 	require.Contains(t, string(echoMsg), promptText, "expected echoed prompt on usercomms socket")
 
-	assertGuildAgentProcesses(t, server.redisAddr, guildID, []string{
+	server.agentProcessGroups = assertGuildAgentProcesses(t, server.redisAddr, guildID, []string{
 		guildID + "#manager_agent",
 		asString(t, echoParticipant["id"], "echo participant id"),
 		asString(t, userParticipant["id"], "user participant id"),
@@ -196,6 +197,10 @@ func startSingleProcessForgeServer(t *testing.T, binPath, forgeRoot string, nats
 		"FORGE_ENABLE_UI_API=true",
 		"FORGE_IDENTITY_MODE=local",
 		"FORGE_QUOTA_MODE=local",
+		"FORGE_LOCAL_USER_ID="+defaultUserID,
+		"FORGE_LOCAL_USER_NAME="+defaultUserName,
+		"FORGE_LOCAL_ORGANIZATION_ID="+defaultOrganizationID,
+		"FORGE_LOCAL_ORGANIZATION_NAME=Local E2E",
 		"PYTHONUNBUFFERED=1",
 	)
 	if natsURL != "" {
@@ -211,12 +216,27 @@ func startSingleProcessForgeServer(t *testing.T, binPath, forgeRoot string, nats
 	go func() {
 		waitDone <- cmd.Wait()
 	}()
+	server := &singleProcessForgeServer{stdout: stdout, stderr: stderr}
 
 	t.Cleanup(func() {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = syscall.Kill(pid, syscall.SIGTERM)
 		select {
 		case <-waitDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(25 * time.Second):
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			<-waitDone
+			t.Errorf("forge server did not complete graceful shutdown")
+		}
+		for _, processGroup := range server.agentProcessGroups {
+			if err := waitFor(10*time.Second, 100*time.Millisecond, func() error {
+				if syscall.Kill(-processGroup, 0) == nil {
+					return fmt.Errorf("agent process group %d is still running", processGroup)
+				}
+				return nil
+			}); err != nil {
+				_ = syscall.Kill(-processGroup, syscall.SIGKILL)
+				t.Error(err)
+			}
 		}
 		if t.Failed() {
 			t.Logf("forge server stdout:\n%s", stdout.String())
@@ -260,14 +280,11 @@ func startSingleProcessForgeServer(t *testing.T, binPath, forgeRoot string, nats
 		t.Fatalf("in-process client node did not register: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
 
-	return &singleProcessForgeServer{
-		publicBase: publicBase,
-		rusticBase: publicBase + "/rustic",
-		wsBase:     "ws://" + listenAddr,
-		redisAddr:  embeddedRedisAddr,
-		stdout:     stdout,
-		stderr:     stderr,
-	}
+	server.publicBase = publicBase
+	server.rusticBase = publicBase + "/rustic"
+	server.wsBase = "ws://" + listenAddr
+	server.redisAddr = embeddedRedisAddr
+	return server
 }
 
 func seedRusticUIEchoCatalog(t *testing.T, client *http.Client, rusticBase string) string {
@@ -570,7 +587,7 @@ func waitForEchoTextFromEvents(
 	return matchedMessage
 }
 
-func assertGuildAgentProcesses(t *testing.T, redisAddr, guildID string, expectedAgentIDs []string) {
+func assertGuildAgentProcesses(t *testing.T, redisAddr, guildID string, expectedAgentIDs []string) []int {
 	t.Helper()
 
 	sort.Strings(expectedAgentIDs)
@@ -613,6 +630,7 @@ func assertGuildAgentProcesses(t *testing.T, redisAddr, guildID string, expected
 	require.Equal(t, expectedAgentIDs, actualAgentIDs)
 
 	pidSeen := map[int]bool{}
+	processGroups := make([]int, 0, len(expectedAgentIDs))
 	for _, agentID := range expectedAgentIDs {
 		status := statuses[agentID]
 		require.False(t, pidSeen[status.PID], "duplicate pid %d shared by multiple agents", status.PID)
@@ -621,7 +639,11 @@ func assertGuildAgentProcesses(t *testing.T, redisAddr, guildID string, expected
 		cmdline := readPIDCommandLine(t, status.PID)
 		require.Contains(t, cmdline, "uvx", "agent %s is not running under uvx: %s", agentID, cmdline)
 		require.Contains(t, cmdline, "rustic_ai.forge.agent_runner", "agent %s is not running the forge agent runner: %s", agentID, cmdline)
+		processGroup, err := syscall.Getpgid(status.PID)
+		require.NoError(t, err)
+		processGroups = append(processGroups, processGroup)
 	}
+	return processGroups
 }
 
 type agentStatusSnapshot struct {

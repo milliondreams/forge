@@ -61,7 +61,7 @@ func TestMapper_GuildSpec(t *testing.T) {
 	}
 
 	// 2. Map to GORM Model
-	model := store.FromGuildSpec(original, "org-id-1")
+	model := store.FromGuildSpec(original, "org-id-1", "user-id-1")
 
 	// Validate Model fields
 	if model.ID != original.ID || model.Name != original.Name {

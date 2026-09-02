@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,9 @@ func resolveEndpoint(providerID string, cfg ProviderConfig) (oauth2.Endpoint, er
 // given (orgID, providerID) pair.
 var ErrNotConnected = errors.New("oauth: provider not connected")
 
+var ErrScopeReduction = errors.New("oauth: requested scopes would drop existing access")
+var ErrUndeclaredScope = errors.New("oauth: requested scope is not declared by the provider")
+
 // pendingFlow holds in-progress OAuth state between authorize and callback.
 type pendingFlow struct {
 	orgID        string
@@ -69,6 +73,7 @@ type pendingFlow struct {
 	// resource is the RFC 8707 resource indicator sent with the authorization
 	// request; the token exchange must repeat it. Empty when unconfigured.
 	resource  string
+	scopes    []string
 	expiresAt time.Time
 }
 
@@ -171,6 +176,12 @@ func NewManagerWithStores(cfg *ProvidersConfig, store TokenStore, credStore Clie
 // clientSecret may be empty: endpoints are discovered from the provider's
 // resource URL and a client is registered on demand.
 func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, clientSecret, redirectURL string) (string, string, error) {
+	return m.GetAuthURLForScopes(ctx, orgID, providerID, clientID, clientSecret, redirectURL, nil)
+}
+
+// GetAuthURLForScopes begins an OAuth flow for the exact scopes captured by a
+// launch preflight. A nil scope list uses the provider defaults.
+func (m *Manager) GetAuthURLForScopes(ctx context.Context, orgID, providerID, clientID, clientSecret, redirectURL string, scopes []string) (string, string, error) {
 	m.mu.Lock()
 	_, active := m.activeProviders[providerID]
 	cfg := m.providers[providerID]
@@ -182,6 +193,33 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 
 	if redirectURL == "" {
 		redirectURL = cfg.RedirectURL
+	}
+	requestedScopes := append([]string{}, cfg.Scopes...)
+	if scopes != nil {
+		requestedScopes = append([]string{}, scopes...)
+	}
+	declaredScopes := make(map[string]struct{}, len(cfg.Scopes))
+	for _, scope := range cfg.Scopes {
+		declaredScopes[strings.TrimSpace(scope)] = struct{}{}
+	}
+	for _, scope := range requestedScopes {
+		normalized := strings.TrimSpace(scope)
+		if _, declared := declaredScopes[normalized]; !declared {
+			return "", "", fmt.Errorf("%w: %q for provider %q", ErrUndeclaredScope, normalized, providerID)
+		}
+	}
+	if granted, connected, err := m.GrantedScopes(orgID, providerID); err != nil {
+		return "", "", fmt.Errorf("loading existing OAuth grant: %w", err)
+	} else if connected {
+		requested := make(map[string]struct{}, len(requestedScopes))
+		for _, scope := range requestedScopes {
+			requested[strings.TrimSpace(scope)] = struct{}{}
+		}
+		for _, scope := range granted {
+			if _, retained := requested[strings.TrimSpace(scope)]; !retained {
+				return "", "", fmt.Errorf("%w: missing %q", ErrScopeReduction, scope)
+			}
+		}
 	}
 
 	// Resolve endpoints and, for DCR providers, obtain client credentials.
@@ -203,7 +241,7 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 		}
 		endpoint = res.endpoint
 
-		clientID, clientSecret, err = m.registerIfNeeded(ctx, providerID, cfg, res, redirectURL)
+		clientID, clientSecret, err = m.registerIfNeeded(ctx, providerID, res, redirectURL, requestedScopes)
 		if err != nil {
 			return "", "", fmt.Errorf("registering client for %q: %w", providerID, err)
 		}
@@ -241,6 +279,7 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 		redirectURL:  redirectURL,
 		endpoint:     endpoint,
 		resource:     cfg.ResourceURL,
+		scopes:       requestedScopes,
 		expiresAt:    time.Now().Add(10 * time.Minute),
 	}
 	m.mu.Unlock()
@@ -249,7 +288,7 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		Endpoint:     endpoint,
-		Scopes:       cfg.Scopes,
+		Scopes:       requestedScopes,
 		RedirectURL:  redirectURL,
 	}
 
@@ -277,7 +316,7 @@ func (m *Manager) GetAuthURL(ctx context.Context, orgID, providerID, clientID, c
 // provider, registering a new client via Dynamic Client Registration (RFC 7591)
 // when none exist or the stored client_secret has expired. The client is shared
 // across all orgs, so it is keyed by providerID only.
-func (m *Manager) registerIfNeeded(ctx context.Context, providerID string, cfg ProviderConfig, res *resolvedProvider, redirectURL string) (string, string, error) {
+func (m *Manager) registerIfNeeded(ctx context.Context, providerID string, res *resolvedProvider, redirectURL string, requestedScopes []string) (string, string, error) {
 	loadedCreds, ok, err := m.credStore.LoadCredentials(providerID)
 	if err != nil {
 		return "", "", fmt.Errorf("loading OAuth client credentials: %w", err)
@@ -296,7 +335,7 @@ func (m *Manager) registerIfNeeded(ctx context.Context, providerID string, cfg P
 		ResponseTypes:           []string{"code"},
 		ClientName:              m.clientName,
 		ClientURI:               m.clientURI,
-		Scope:                   strings.Join(cfg.Scopes, " "),
+		Scope:                   strings.Join(requestedScopes, " "),
 	}
 	resp, err := oauthex.RegisterClient(ctx, res.registrationEndpoint, meta, m.httpClient)
 	if err != nil {
@@ -335,8 +374,6 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 	if _, active := m.activeProviders[flow.providerID]; !active {
 		return providerID, fmt.Errorf("unknown provider: %s", flow.providerID)
 	}
-	cfg := m.providers[flow.providerID]
-
 	// Reuse the endpoint captured at authorize time so DCR-discovered endpoints
 	// don't need to be re-resolved here.
 	endpoint := flow.endpoint
@@ -345,7 +382,7 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 		ClientID:     flow.clientID,
 		ClientSecret: flow.clientSecret,
 		Endpoint:     endpoint,
-		Scopes:       cfg.Scopes,
+		Scopes:       flow.scopes,
 		RedirectURL:  flow.redirectURL,
 	}
 
@@ -368,7 +405,7 @@ func (m *Manager) ExchangeCode(ctx context.Context, code, state string) (provide
 		clientID:     flow.clientID,
 		clientSecret: flow.clientSecret,
 		endpoint:     endpoint,
-		scopes:       cfg.Scopes,
+		scopes:       flow.scopes,
 		resource:     flow.resource,
 	})
 }
@@ -484,6 +521,35 @@ func (m *Manager) IsConnected(orgID, providerID string) (bool, error) {
 	return ok, err
 }
 
+func (m *Manager) ConnectionSatisfiesScopes(orgID, providerID string, required []string) (bool, []string, error) {
+	entry, connected, err := m.store.Load(orgID, providerID)
+	if err != nil || !connected {
+		return false, append([]string{}, required...), err
+	}
+	granted := make(map[string]struct{}, len(entry.scopes))
+	for _, scope := range entry.scopes {
+		granted[strings.TrimSpace(scope)] = struct{}{}
+	}
+	missing := make([]string, 0)
+	for _, scope := range required {
+		scope = strings.TrimSpace(scope)
+		if _, exists := granted[scope]; !exists {
+			missing = append(missing, scope)
+		}
+	}
+	return len(missing) == 0, missing, nil
+}
+
+func (m *Manager) GrantedScopes(orgID, providerID string) ([]string, bool, error) {
+	entry, connected, err := m.store.Load(orgID, providerID)
+	if err != nil || !connected {
+		return nil, connected, err
+	}
+	scopes := append([]string{}, entry.scopes...)
+	sort.Strings(scopes)
+	return scopes, true, nil
+}
+
 // ProviderExists reports whether providerID is active (i.e. registered via CheckAndUpdateProvider).
 func (m *Manager) ProviderExists(id string) bool {
 	m.mu.Lock()
@@ -496,25 +562,31 @@ func (m *Manager) ProviderExists(id string) bool {
 // the provider's scope list, marks the provider as active, and returns true.
 // Returns false if the provider is unknown (no state is updated in that case).
 func (m *Manager) CheckAndUpdateProvider(providerID string, scopes []string) bool {
+	return m.ActivateProviderRequirements(providerID, scopes) == nil
+}
+
+// ActivateProviderRequirements validates one declaration against the provider
+// allowlist and marks the provider available without mutating its configured
+// scopes.
+func (m *Manager) ActivateProviderRequirements(providerID string, scopes []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cfg, ok := m.providers[providerID]
 	if !ok {
-		return false
+		return fmt.Errorf("unknown OAuth provider %q", providerID)
 	}
-	existing := make(map[string]struct{}, len(cfg.Scopes))
+	declared := make(map[string]struct{}, len(cfg.Scopes))
 	for _, s := range cfg.Scopes {
-		existing[s] = struct{}{}
+		declared[strings.TrimSpace(s)] = struct{}{}
 	}
 	for _, s := range scopes {
-		if _, found := existing[s]; !found {
-			cfg.Scopes = append(cfg.Scopes, s)
-			existing[s] = struct{}{}
+		normalized := strings.TrimSpace(s)
+		if _, found := declared[normalized]; !found {
+			return fmt.Errorf("%w: %q for provider %q", ErrUndeclaredScope, normalized, providerID)
 		}
 	}
-	m.providers[providerID] = cfg
 	m.activeProviders[providerID] = struct{}{}
-	return true
+	return nil
 }
 
 // ProviderDisplayName returns the display name for a provider.

@@ -85,7 +85,7 @@ func TestBuildModels_PreservesDependencyMapsAndPredicates(t *testing.T) {
 		},
 	}
 
-	gm, agents := buildModels(spec, "org-1")
+	gm, agents := buildModels(spec, "org-1", "user-1")
 
 	require.Equal(t, "rustic_ai.redis.messaging.backend", gm.BackendModule)
 	require.Equal(t, "RedisMessagingBackend", gm.BackendClass)
@@ -132,7 +132,7 @@ func TestBuildModels_PersistsRoutes(t *testing.T) {
 		},
 	}
 
-	gm, _ := buildModels(spec, "org-1")
+	gm, _ := buildModels(spec, "org-1", "user-1")
 
 	require.Len(t, gm.Routes, 1)
 	require.NotNil(t, gm.Routes[0].GuildID)
@@ -161,7 +161,7 @@ func TestBuildModels_PreservesAgentBehaviorFlags(t *testing.T) {
 		},
 	}
 
-	_, agents := buildModels(spec, "org-1")
+	_, agents := buildModels(spec, "org-1", "user-1")
 
 	require.Len(t, agents, 1)
 	require.True(t, agents[0].ListenToDefaultTopic)

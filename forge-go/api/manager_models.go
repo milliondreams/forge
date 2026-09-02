@@ -8,6 +8,7 @@ import (
 type EnsureGuildRequest struct {
 	GuildSpec      *protocol.GuildSpec `json:"guild_spec"`
 	OrganizationID string              `json:"organization_id"`
+	CreatedBy      string              `json:"created_by"`
 }
 
 type EnsureGuildResponse struct {
@@ -19,6 +20,7 @@ type EnsureGuildResponse struct {
 type GuildSpecWithStatusResponse struct {
 	GuildSpec *protocol.GuildSpec `json:"guild_spec"`
 	Status    store.GuildStatus   `json:"status"`
+	CreatedBy string              `json:"created_by"`
 }
 
 type UpdateGuildStatusRequest struct {
@@ -33,6 +35,12 @@ type UpdateGuildStatusResponse struct {
 type EnsureAgentResponse struct {
 	AgentID string `json:"agent_id"`
 	Created bool   `json:"created"`
+}
+
+type EnsureAgentRequest struct {
+	Version            string              `json:"version"`
+	AgentSpec          *protocol.AgentSpec `json:"agent_spec"`
+	DependencyProfiles []string            `json:"dependency_profiles"`
 }
 
 type UpdateAgentStatusRequest struct {

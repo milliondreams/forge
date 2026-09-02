@@ -63,7 +63,7 @@ if err := b.nc.Publish(nsTopic, msgBytes); err != nil { /* ... */ }
 | Concern | RedisBackend | NATSBackend |
 |---|---|---|
 | Durable history | Per-topic ZSET, keyed by namespaced topic, scored by Gemstone timestamp | JetStream stream, one per topic (`MSGS_<sanitized>`) |
-| By-ID lookup | String cache key `msg:{namespace}:{id}` with TTL | JetStream KV bucket per namespace (`msg-cache-<sanitized-ns>`) |
+| By-ID lookup | String cache key `msg:{namespace}:{id}` with TTL | JetStream KV bucket per namespace (`msg-cache-<sanitized-ns>`), without time-based expiry |
 | Live delivery | Redis PubSub on the namespaced topic | Core NATS pub/sub on the namespaced topic |
 | Connection lifecycle | Externally managed; `Close()` is a no-op | Owned by the backend; `Close()` drains the connection |
 | Resilience on restart | N/A (Redis is the durability layer) | `AddStream`/`CreateKeyValue` failures fall back to `StreamInfo`/bind-existing-bucket lookups; the in-memory `streams`/`kvBuckets` caches rebuild lazily |
@@ -91,7 +91,7 @@ func kvBucketName(ns string) string  { return "msg-cache-" + sanitize(ns) }  // 
 
 `sanitize` replaces `:`, `.`, and `$` with `_` — the characters that are meaningful to NATS subject syntax but appear routinely in namespaced topics (`guild123:user_notifications:42`). Streams and KV buckets are lazily created on first use and cached in-memory, guarded by a mutex.
 
-## Ordering, TTL, and retention
+## Ordering and retention
 
 Message IDs are 64-bit GemstoneIDs packing priority, millisecond timestamp, machine ID, and a sequence number. Both backends rely on the embedded timestamp for ordering:
 
@@ -99,30 +99,9 @@ Message IDs are 64-bit GemstoneIDs packing priority, millisecond timestamp, mach
 - The NATS `StartTime` query hint uses the same timestamp.
 - `GetMessagesSince` filters strictly on `ID > sinceID` after fetching, regardless of backend.
 
-**Default message TTL is 3600 seconds (1 hour)**, configurable per backend via environment variable:
+Redis's direct message-ID cache defaults to a 3600-second (1 hour) TTL, configurable through `RUSTIC_AI_REDIS_MSG_TTL`. Its per-topic ZSET history remains durable.
 
-| Backend | Env var |
-|---|---|
-| Redis | `RUSTIC_AI_REDIS_MSG_TTL` (integer seconds) |
-| NATS | `RUSTIC_AI_NATS_MSG_TTL` (integer seconds) |
-
-NATS additionally overrides the TTL to a **60-day long-retention window** for topics that need to survive well past the default window:
-
-```go
-const longRetentionTTL = 60 * 24 * time.Hour // 60 days
-var longRetentionTopics = []string{"user_notifications:", "user_message_broadcast"}
-
-func (b *NATSBackend) ttlForTopic(nsTopic string) time.Duration {
-	for _, pattern := range longRetentionTopics {
-		if strings.Contains(nsTopic, pattern) {
-			return longRetentionTTL
-		}
-	}
-	return b.config.MessageTTL // default 3600s
-}
-```
-
-Any namespaced topic containing `user_notifications:` or `user_message_broadcast` gets the 60-day `MaxAge` applied to its JetStream stream instead of the default.
+Forge's NATS backend does not time-expire durable guild messages. Every message stream uses `MaxAge: 0`, and every per-guild message-ID KV bucket uses `TTL: 0`. Ordinary agent traffic and user-facing conversation history therefore follow the same guild-lifetime retention contract.
 
 ## Delivery semantics: live is lossy, history is truth
 

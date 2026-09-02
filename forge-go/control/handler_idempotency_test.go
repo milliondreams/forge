@@ -136,6 +136,8 @@ func (r *recordingEventBackend) Subscribe(_ context.Context, _ string, _ ...stri
 	return nil, nil
 }
 
+func (r *recordingEventBackend) DeleteNamespace(_ context.Context, _ string) error { return nil }
+
 func (r *recordingEventBackend) Close() error { return nil }
 
 func setupIdempotencyTest(t *testing.T) (*redis.Client, *fakeStatusStore, *orderTrackingSupervisor, *recordingEventBackend, *ControlQueueHandler) {

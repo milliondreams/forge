@@ -32,6 +32,8 @@ import (
 	"github.com/rustic-ai/forge/forge-go/telemetry"
 )
 
+const embeddedWorkloadShutdownTimeout = 10 * time.Second
+
 func registerNode(ctx context.Context, serverURL string, payload []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/nodes/register", serverURL), bytes.NewBuffer(payload))
 	if err != nil {
@@ -339,8 +341,17 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 
 	log.Info("Forge client shutting down.")
 	log.Info("Stopping embedded client workloads before client exit.")
-	queueHandler.Stop()
-	log.Info("Embedded client workloads stopped.")
+	workloadShutdownCtx, cancelWorkloadShutdown := context.WithTimeout(
+		context.Background(),
+		embeddedWorkloadShutdownTimeout,
+	)
+	workloadShutdownErr := queueHandler.StopWithContext(workloadShutdownCtx)
+	cancelWorkloadShutdown()
+	if workloadShutdownErr != nil {
+		log.Error("Embedded client workload shutdown failed.", "error", workloadShutdownErr)
+	} else {
+		log.Info("Embedded client workloads stopped.")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -349,5 +360,5 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 	}
 	_ = metricsServer.Shutdown(shutdownCtx)
 
-	return nil
+	return workloadShutdownErr
 }

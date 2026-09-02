@@ -67,7 +67,7 @@ func TestTransformRusticMessage_ParticipantListUsesLegacyUIShape(t *testing.T) {
 	require.Equal(t, "bot", first["type"])
 }
 
-func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
+func TestRusticMessagesRoute_ShapesStudioEnvelope(t *testing.T) {
 	t.Setenv("FORGE_ENABLE_PUBLIC_API", "false")
 	t.Setenv("FORGE_ENABLE_UI_API", "true")
 	t.Setenv("FORGE_IDENTITY_MODE", "local")
@@ -95,13 +95,13 @@ func TestRusticMessagesRoute_ShapesLegacyEnvelope(t *testing.T) {
 	msg.ID = 999
 	msg.Format = "rustic_ai.core.guild.agent_ext.depends.llm.models.ChatCompletionResponse"
 	msg.Payload = json.RawMessage(`{"choices":[{"message":{"content":"echo"}}]}`)
-	msg.Topics = protocol.TopicsFromString("user_notifications:dummyuserid")
+	msg.Topics = protocol.TopicsFromString("user_notifications:local-user-123")
 	msg.Priority = int(protocol.PriorityNormal)
 	msg.Thread = []uint64{999}
 	msg.MessageHistory = []protocol.ProcessEntry{}
 	msg.Normalize()
 
-	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:dummyuserid", &msg))
+	require.NoError(t, msgClient.PublishMessage(context.Background(), "g1", "user_notifications:local-user-123", &msg))
 
 	req := httptest.NewRequest(http.MethodGet, "/rustic/api/guilds/g1/local-user-123/messages", nil)
 	rr := httptest.NewRecorder()
@@ -135,6 +135,7 @@ func TestRusticFileRoutes_ProxyStyleRewrite(t *testing.T) {
 			Properties:  map[string]any{},
 		},
 		OrganizationID: "org-1",
+		UserID:         "user-1",
 	}
 	createBody, err := json.Marshal(createReq)
 	require.NoError(t, err)
@@ -200,7 +201,7 @@ func TestRusticCatalogAgentDependenciesRoute(t *testing.T) {
 				"dependency_key": "llm",
 				"agent_level":    agentLevel,
 				"variable_name":  varName,
-				"resolved_type":  depType,
+				"required_type":  depType,
 			},
 		},
 	}))
@@ -217,8 +218,8 @@ func TestRusticCatalogAgentDependenciesRoute(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
 	require.Len(t, deps, 1)
 	require.Equal(t, "llm", deps[0].DependencyKey)
-	require.NotNil(t, deps[0].ResolvedType)
-	require.Equal(t, depType, *deps[0].ResolvedType)
+	require.NotNil(t, deps[0].RequiredType)
+	require.Equal(t, depType, *deps[0].RequiredType)
 	require.NotNil(t, deps[0].VariableName)
 	require.Equal(t, varName, *deps[0].VariableName)
 }
@@ -248,7 +249,10 @@ llm_unavailable:
     display_name: Unavailable LLM
     selectable: true
   requirements:
-    secrets: [TEST_MISSING_DEPENDENCY_SECRET]
+    secrets:
+      - key: TEST_MISSING_DEPENDENCY_SECRET
+        env: TEST_MISSING_DEPENDENCY_SECRET
+        label: Test Missing Dependency Secret
   properties:
     model: unavailable
 llm_hidden:
@@ -277,9 +281,10 @@ llm_hidden:
 
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
-		require.Len(t, deps, 2)
+		require.Len(t, deps, 3)
 		require.Equal(t, "filesystem", deps[0].Key)
 		require.Equal(t, "llm_openai", deps[1].Key)
+		require.Equal(t, "llm_unavailable", deps[2].Key)
 	})
 
 	t.Run("include unavailable", func(t *testing.T) {
@@ -291,7 +296,7 @@ llm_hidden:
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
 		require.Len(t, deps, 3)
-		require.Equal(t, "needs_configuration", deps[2].Availability.Status)
+		require.Equal(t, "ready", deps[2].Availability.Status)
 	})
 
 	t.Run("filter by query", func(t *testing.T) {
@@ -302,7 +307,7 @@ llm_hidden:
 
 		var deps []ConfiguredDependencyEntry
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &deps))
-		require.Len(t, deps, 1)
+		require.Len(t, deps, 2)
 		require.Equal(t, "llm_openai", deps[0].Key)
 		require.Equal(t, "rustic_ai.core.llm.LLM", deps[0].ProvidedType)
 	})
@@ -360,7 +365,7 @@ llm_gemini:
 				"dependency_key": "llm",
 				"agent_level":    agentLevel,
 				"variable_name":  varName,
-				"resolved_type":  depType,
+				"required_type":  depType,
 			},
 		},
 	}))
@@ -401,8 +406,8 @@ llm_gemini:
 	require.Len(t, summaries[0].Dependencies, 1)
 	require.Equal(t, "agent:research_agent:llm", summaries[0].Dependencies[0].BindingKey)
 	require.Equal(t, "llm", summaries[0].Dependencies[0].DependencyKey)
-	require.NotNil(t, summaries[0].Dependencies[0].ResolvedType)
-	require.Equal(t, depType, *summaries[0].Dependencies[0].ResolvedType)
+	require.NotNil(t, summaries[0].Dependencies[0].RequiredType)
+	require.Equal(t, depType, *summaries[0].Dependencies[0].RequiredType)
 	require.Len(t, summaries[0].Dependencies[0].Providers, 2)
 	require.Equal(t, "llm_gemini", summaries[0].Dependencies[0].Providers[0].Key)
 	require.Equal(t, "llm_openai", summaries[0].Dependencies[0].Providers[1].Key)

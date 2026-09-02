@@ -38,6 +38,7 @@ nav:
       - Running a Guild: guides/running-a-guild.md
       - Authoring Guild Specs: guides/authoring-guild-specs.md
       - Distributed Deployment: guides/distributed-deployment.md
+      - Rustic UI with External Forge: guides/rustic-ui-external-forge.md
       - Securing Secrets & OAuth: guides/securing-secrets.md
       - Observability: guides/observability.md
       - Model Fit for Local LLMs: guides/model-fit.md

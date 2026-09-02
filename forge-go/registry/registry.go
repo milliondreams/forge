@@ -1,8 +1,8 @@
 package registry
 
 import (
+	"bytes"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -27,19 +27,18 @@ type FilesystemPermission struct {
 
 // AgentRegistryEntry represents a single verifiable agent template in the registry
 type AgentRegistryEntry struct {
-	ID               string                 `yaml:"id"`
-	ClassName        string                 `yaml:"class_name"`
-	Description      string                 `yaml:"description,omitempty"`
-	Runtime          RuntimeType            `yaml:"runtime"`
-	Package          string                 `yaml:"package,omitempty"`           // For uvx base package
-	WithDependencies []string               `yaml:"with_dependencies,omitempty"` // For uvx additional dependencies (e.g., local paths)
-	Image            string                 `yaml:"image,omitempty"`             // For docker
-	Executable       string                 `yaml:"executable,omitempty"`        // For binary
-	Args             []string               `yaml:"args,omitempty"`              // Additional args
-	Secrets          []protocol.SecretNeed  `yaml:"secrets,omitempty"`           // Secrets required by the agent
-	OAuth            []protocol.OAuthNeed   `yaml:"oauth,omitempty"`             // OAuth providers required by the agent
-	Network          []string               `yaml:"network,omitempty"`           // Authorized egress hosts/networks
-	Filesystem       []FilesystemPermission `yaml:"filesystem,omitempty"`        // Host bind mounts
+	ID               string                          `yaml:"id"`
+	ClassName        string                          `yaml:"class_name"`
+	Description      string                          `yaml:"description,omitempty"`
+	Runtime          RuntimeType                     `yaml:"runtime"`
+	Package          string                          `yaml:"package,omitempty"`           // For uvx base package
+	WithDependencies []string                        `yaml:"with_dependencies,omitempty"` // For uvx additional dependencies (e.g., local paths)
+	Image            string                          `yaml:"image,omitempty"`             // For docker
+	Executable       string                          `yaml:"executable,omitempty"`        // For binary
+	Args             []string                        `yaml:"args,omitempty"`              // Additional args
+	Requirements     protocol.CredentialRequirements `yaml:"requirements,omitempty"`
+	Network          []string                        `yaml:"network,omitempty"`    // Authorized egress hosts/networks
+	Filesystem       []FilesystemPermission          `yaml:"filesystem,omitempty"` // Host bind mounts
 }
 
 // RegistryConfig maps the root yaml structure
@@ -52,9 +51,9 @@ type Registry struct {
 	entries map[string]AgentRegistryEntry
 }
 
-// Load reads and parses an agent registry yaml file and validates OAuth provider references.
-// If oauthMgr is non-nil, Validate is called automatically after class-name validation;
-// entries referencing unknown OAuth providers are removed and a warning is logged.
+// Load reads and strictly parses an agent registry YAML file and validates
+// credential declarations. When oauthMgr is non-nil, every OAuth provider and
+// requested scope must also exist in the configured provider catalog.
 func Load(path string, oauthMgr *oauth.Manager) (*Registry, error) {
 	if path == "" {
 		path = os.Getenv("FORGE_AGENT_REGISTRY")
@@ -69,7 +68,9 @@ func Load(path string, oauthMgr *oauth.Manager) (*Registry, error) {
 	}
 
 	var config RegistryConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to parse registry YAML %s: %w", path, err)
 	}
 
@@ -84,10 +85,16 @@ func Load(path string, oauthMgr *oauth.Manager) (*Registry, error) {
 		if entry.Runtime == "" {
 			return nil, fmt.Errorf("invalid registry entry %s: runtime is required", entry.ID)
 		}
+		entry.Requirements.Normalize()
+		if err := entry.Requirements.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid registry entry %s requirements: %w", entry.ID, err)
+		}
 		r.entries[entry.ClassName] = entry
 	}
 
-	r.ValidateOAuth(oauthMgr)
+	if err := r.ValidateOAuth(oauthMgr); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -131,29 +138,20 @@ func (r *Registry) ClassNames() []string {
 	return classNames
 }
 
-// ValidateOAuth checks each registry entry that declares OAuth needs against the provided oauth.Manager.
-// Entries referencing an unknown non-optional OAuth provider are removed from the registry, and a warning is logged.
-// Optional OAuth needs that reference an unknown provider are only warned about.
-// Load calls ValidateOAuth automatically when a non-nil oauth.Manager is provided.
-func (r *Registry) ValidateOAuth(oauthMgr *oauth.Manager) {
+// ValidateOAuth checks every registry OAuth declaration against the configured
+// provider catalog. Invalid declarations fail the complete registry load.
+func (r *Registry) ValidateOAuth(oauthMgr *oauth.Manager) error {
 	if oauthMgr == nil {
-		return
+		return nil
 	}
 	for className, entry := range r.entries {
-		for _, need := range entry.OAuth {
-			if !oauthMgr.CheckAndUpdateProvider(need.Provider, need.Scopes) {
-				if need.Optional != nil && *need.Optional {
-					log.Printf("registry: agent %q (class %s) references unknown optional OAuth provider %q; continuing without it",
-						entry.ID, className, need.Provider)
-				} else {
-					log.Printf("registry: skipping agent %q (class %s) as it references unknown OAuth provider %q",
-						entry.ID, className, need.Provider)
-					delete(r.entries, className)
-					break
-				}
+		for _, need := range entry.Requirements.OAuth {
+			if err := oauthMgr.ActivateProviderRequirements(need.Provider, need.Scopes); err != nil {
+				return fmt.Errorf("registry agent %q (class %s) OAuth requirements: %w", entry.ID, className, err)
 			}
 		}
 	}
+	return nil
 }
 
 // ResolveCommand generates the OS exec slice strings required to launch the given agent entry.

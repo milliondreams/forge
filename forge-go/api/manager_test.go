@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestManagerEnsureGuildAndGetSpec(t *testing.T) {
 		},
 	}
 
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-1"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-1", CreatedBy: "user-1"}
 	resp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -103,9 +104,16 @@ func TestManagerEnsureGuildAndGetSpec(t *testing.T) {
 
 func TestManagerAgentRouteAndHeartbeatLifecycle(t *testing.T) {
 	ts, _ := newManagerTestServer(t)
+	dependencyConfig := filepath.Join(t.TempDir(), "agent-dependencies.yaml")
+	require.NoError(t, os.WriteFile(dependencyConfig, []byte(`dynamic_llm:
+  class_name: test.LLMResolver
+  provided_type: test.LLM
+  properties: {model: test-model}
+`), 0o600))
+	t.Setenv("FORGE_DEPENDENCY_CONFIG", dependencyConfig)
 
 	spec := &protocol.GuildSpec{ID: "g-manager-2", Name: "G2", Description: "d"}
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-2"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-2", CreatedBy: "user-2"}
 	ensureResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	_ = ensureResp.Body.Close()
 	require.Equal(t, http.StatusOK, ensureResp.StatusCode)
@@ -126,16 +134,16 @@ func TestManagerAgentRouteAndHeartbeatLifecycle(t *testing.T) {
 		},
 		Resources: protocol.ResourceSpec{
 			NumCPUs:         &resourcesCPU,
-			Secrets:         []string{"MODEL_TOKEN"},
 			CustomResources: map[string]interface{}{"memory": 512},
 		},
 		QOS: protocol.QOSSpec{Timeout: &qosTimeout},
 	}
-	agResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", agentSpec, nil)
+	agResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", EnsureAgentRequest{Version: "1", AgentSpec: &agentSpec, DependencyProfiles: []string{"dynamic_llm"}}, nil)
 	defer func() { _ = agResp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, agResp.StatusCode)
 
-	idempotentResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", agentSpec, nil)
+	agentSpec.Properties = map[string]interface{}{protocol.DependencyProfilesProperty: []string{"dynamic_llm"}}
+	idempotentResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", EnsureAgentRequest{Version: "1", AgentSpec: &agentSpec, DependencyProfiles: []string{"dynamic_llm"}}, nil)
 	defer func() { _ = idempotentResp.Body.Close() }()
 	require.Equal(t, http.StatusOK, idempotentResp.StatusCode)
 
@@ -167,7 +175,7 @@ func TestManagerAgentRouteAndHeartbeatLifecycle(t *testing.T) {
 
 	conflictingSpec := agentSpec
 	conflictingSpec.Name = "Different"
-	conflictResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", conflictingSpec, nil)
+	conflictResp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/g-manager-2/agents/ensure", EnsureAgentRequest{Version: "1", AgentSpec: &conflictingSpec}, nil)
 	defer func() { _ = conflictResp.Body.Close() }()
 	require.Equal(t, http.StatusConflict, conflictResp.StatusCode)
 
@@ -229,6 +237,7 @@ func TestManagerEndpointAuthToken(t *testing.T) {
 	req := EnsureGuildRequest{
 		GuildSpec:      &protocol.GuildSpec{ID: "g-auth", Name: "Auth", Description: "d"},
 		OrganizationID: "org-auth",
+		CreatedBy:      "user-auth",
 	}
 
 	unauth := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", req, nil)
@@ -282,7 +291,7 @@ func TestManagerEnsureGuild_CreatesWithResolvedFilesystemPathBase(t *testing.T) 
 		},
 	}
 
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-fs"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-fs", CreatedBy: "user-fs"}
 	resp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -334,7 +343,7 @@ func TestManagerEnsureGuild_RejectsFilesystemTraversal(t *testing.T) {
 		},
 	}
 
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-fs"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-fs", CreatedBy: "user-fs"}
 	resp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode)
@@ -374,7 +383,7 @@ func TestManagerEnsureGuild_CreatesWithS3FilesystemGlobalRoot(t *testing.T) {
 		},
 	}
 
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-s3"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-s3", CreatedBy: "user-s3"}
 	resp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -428,7 +437,7 @@ func TestManagerEnsureGuild_CreatesWithGCSFilesystemGlobalRoot(t *testing.T) {
 		},
 	}
 
-	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-gcs"}
+	ensureReq := EnsureGuildRequest{GuildSpec: spec, OrganizationID: "org-gcs", CreatedBy: "user-gcs"}
 	resp := jsonRequest(t, http.MethodPost, ts.URL+"/manager/guilds/ensure", ensureReq, nil)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)

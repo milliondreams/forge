@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/oauth"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseRegistry(t *testing.T) {
@@ -153,20 +154,24 @@ func TestResolveUVXCommand_UsesConfiguredFallback(t *testing.T) {
 	}
 }
 
-func TestValidate_RemovesEntryWithUnknownOAuthProvider(t *testing.T) {
+func TestValidate_RejectsEntryWithUnknownOAuthProvider(t *testing.T) {
 	yml := `entries:
   - id: AgentA
     class_name: "test.AgentA"
     runtime: "binary"
     executable: "python"
-    oauth:
-      - provider: "github"
+    requirements:
+      oauth:
+        - provider: "github"
+          env: "GITHUB_TOKEN"
   - id: AgentB
     class_name: "test.AgentB"
     runtime: "binary"
     executable: "python"
-    oauth:
-      - provider: "google"`
+    requirements:
+      oauth:
+        - provider: "google"
+          env: "GOOGLE_ACCESS_TOKEN"`
 
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "registry.yaml")
@@ -180,16 +185,33 @@ func TestValidate_RemovesEntryWithUnknownOAuthProvider(t *testing.T) {
 		},
 	}
 	mgr := oauth.NewManager(cfg)
-	reg, err := Load(path, mgr)
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
+	if _, err := Load(path, mgr); err == nil {
+		t.Fatal("expected unknown OAuth provider to fail registry loading")
+	}
+}
+
+func TestLoadRejectsInvalidCredentialRequirementShapes(t *testing.T) {
+	tests := []struct {
+		name        string
+		requirement string
+		want        string
+	}{
+		{name: "scalar secret", requirement: "secrets: [OPENAI_API_KEY]", want: "must be an object"},
+		{name: "unknown field", requirement: "secrets: [{key: OPENAI_API_KEY, target: OPENAI_API_KEY}]", want: `field "target" is not allowed`},
+		{name: "invalid environment", requirement: "secrets: [{key: OPENAI_API_KEY, env: invalid-name}]", want: "not a valid environment variable name"},
+		{name: "duplicate secret", requirement: "secrets: [{key: OPENAI_API_KEY}, {key: OPENAI_API_KEY}]", want: "duplicate key"},
+		{name: "OAuth environment required", requirement: "oauth: [{provider: google}]", want: "not a valid environment variable name"},
+		{name: "invalid OAuth scope", requirement: "oauth: [{provider: google, env: GOOGLE_TOKEN, scopes: ['scope with spaces']}]", want: "scopes[0] is invalid"},
 	}
 
-	if _, err := reg.Lookup("test.AgentA"); err != nil {
-		t.Errorf("AgentA (valid provider) should remain in registry, got: %v", err)
-	}
-	if _, err := reg.Lookup("test.AgentB"); err == nil {
-		t.Error("AgentB (unknown provider) should have been removed from registry")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.yaml")
+			yml := "entries:\n  - id: Agent\n    class_name: test.Agent\n    runtime: binary\n    requirements:\n      " + test.requirement + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(yml), 0o600))
+			_, err := Load(path, nil)
+			require.ErrorContains(t, err, test.want)
+		})
 	}
 }
 
@@ -199,8 +221,10 @@ func TestValidate_NilManagerIsNoop(t *testing.T) {
     class_name: "test.AgentA"
     runtime: "binary"
     executable: "python"
-    oauth:
-      - provider: "github"`
+    requirements:
+      oauth:
+        - provider: "github"
+          env: "GITHUB_TOKEN"`
 
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "registry.yaml")

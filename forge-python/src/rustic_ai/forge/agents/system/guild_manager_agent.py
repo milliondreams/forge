@@ -75,6 +75,7 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
         props = self.agent_spec.props
         guild_spec = props.guild_spec
         self.organization_id = props.organization_id
+        self.created_by = props.created_by
 
         self.metastore = ManagerMetastoreClient(
             base_url=props.manager_api_base_url,
@@ -92,7 +93,9 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
         logging.info("Guild Manager initializing guild %s", guild_id)
 
-        ensure_resp = self.metastore.ensure_guild(guild_spec, self.organization_id)
+        ensure_resp = self.metastore.ensure_guild(
+            guild_spec, self.organization_id, self.created_by
+        )
         persisted_spec = GuildSpec.model_validate(ensure_resp["guild_spec"])
         self.guild_spec = persisted_spec
 
@@ -198,7 +201,9 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             )
         )
 
-        ensure_resp = self.metastore.ensure_guild(self.guild_spec, self.organization_id)
+        ensure_resp = self.metastore.ensure_guild(
+            self.guild_spec, self.organization_id, self.created_by
+        )
         persisted_spec = GuildSpec.model_validate(ensure_resp["guild_spec"])
         guild_status = GuildStatus(ensure_resp["status"])
 
@@ -247,8 +252,10 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
     @processor(
         SelfReadyNotification,
-        predicate=lambda self, msg: msg.sender == self.get_agent_tag()
-        and msg.topic_published_to == self._self_inbox,
+        predicate=lambda self, msg: (
+            msg.sender == self.get_agent_tag()
+            and msg.topic_published_to == self._self_inbox
+        ),
         handle_essential=True,
     )
     def launch_guild_agents(self, ctx: ProcessContext[SelfReadyNotification]) -> None:
@@ -260,8 +267,10 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             raise RuntimeError("Guild is not initialized")
 
         aar = ctx.payload
-        agent_spec = self._materialize_dependency_selections(aar)
-        ensure_response = self.metastore.ensure_agent(self.guild_id, agent_spec)
+        agent_spec, profile_keys = self._materialize_dependency_selections(aar)
+        ensure_response = self.metastore.ensure_agent(
+            self.guild_id, agent_spec, profile_keys
+        )
         if ensure_response.get("created", True):
             self.guild.launch_agent(agent_spec)
 
@@ -294,9 +303,9 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
     def _materialize_dependency_selections(
         self, request: AgentLaunchRequest
-    ) -> AgentSpec:
+    ) -> tuple[AgentSpec, list[str]]:
         if not request.dependency_selections:
-            return request.agent_spec
+            return request.agent_spec, []
 
         agent_spec = request.agent_spec.model_copy(deep=True)
         catalogs = self.guild_spec.properties.get("dependency_selections", {})
@@ -310,7 +319,9 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
         for dependency_key, selection in request.dependency_selections.items():
             catalog = catalogs.get(selection.catalog_key)
             if not isinstance(catalog, dict):
-                raise ValueError(f"Unknown dependency catalog {selection.catalog_key!r}")
+                raise ValueError(
+                    f"Unknown dependency catalog {selection.catalog_key!r}"
+                )
             if catalog.get("dependency_key") != dependency_key:
                 raise ValueError(
                     f"Catalog {selection.catalog_key!r} cannot provide dependency {dependency_key!r}"
@@ -358,7 +369,7 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
         agent_spec.name = base_name
         if agent_spec.name.casefold() in used_names:
             agent_spec.name = f"{base_name} ({digest})"
-        return agent_spec
+        return agent_spec, [profile_key for profile_key, _ in resolved_profiles]
 
     @staticmethod
     def _match_catalog_profiles(

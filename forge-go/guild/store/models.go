@@ -125,6 +125,7 @@ type GuildModel struct {
 	BackendConfig   JSONB       `gorm:"type:jsonb" json:"backend_config"`
 	Properties      JSONB       `gorm:"type:jsonb" json:"properties"`
 	OrganizationID  string      `gorm:"index;not null" json:"organization_id"`
+	CreatedBy       string      `gorm:"index;not null" json:"created_by"`
 	DependencyMap   JSONB       `gorm:"type:jsonb" json:"dependency_map"`
 	Status          GuildStatus `gorm:"default:unknown" json:"status"`
 

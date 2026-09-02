@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,4 +56,24 @@ func TestLocalFileStore(t *testing.T) {
 
 	filesAfter, _ := store.List(context.Background(), cfg, orgID, guildID, "")
 	assert.Len(t, filesAfter, 0)
+}
+
+func TestDeleteGuildPrefixKeepsSiblingGuild(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewLocalFileStore(NewFileSystemResolver(basePath))
+	cfg := DependencyConfig{PathBase: basePath, Protocol: "file"}
+	ctx := context.Background()
+	for _, guildID := range []string{"guild-a", "guild-a2"} {
+		require.NoError(t, store.Upload(ctx, cfg, "org-1", guildID, "agent-1", "file.txt", []byte(guildID), "text/plain", nil))
+		require.NoError(t, store.Upload(ctx, cfg, "org-1", guildID, "", "global.txt", []byte(guildID), "text/plain", nil))
+	}
+	require.NoError(t, store.DeleteGuildPrefix(ctx, cfg, "org-1", "guild-a"))
+	_, err := os.Stat(filepath.Join(basePath, "org-1", "guild-a"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	deleted, err := store.List(ctx, cfg, "org-1", "guild-a", "agent-1")
+	require.NoError(t, err)
+	require.Empty(t, deleted)
+	sibling, err := store.List(ctx, cfg, "org-1", "guild-a2", "agent-1")
+	require.NoError(t, err)
+	require.Len(t, sibling, 1)
 }

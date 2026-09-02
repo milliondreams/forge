@@ -13,7 +13,7 @@ func TestStore_GuildSpecLifecycle_DBParity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	spec := buildRichLifecycleSpec("lifecycle-guild-1")
-	model := store.FromGuildSpec(spec, "org-lifecycle")
+	model := store.FromGuildSpec(spec, "org-lifecycle", "user-lifecycle")
 
 	if err := db.CreateGuild(model); err != nil {
 		t.Fatalf("create guild: %v", err)
@@ -86,7 +86,7 @@ func TestStore_GuildSpecLifecycle_EmptyCollectionsStayNonNil(t *testing.T) {
 		},
 	}
 
-	model := store.FromGuildSpec(spec, "org-lifecycle")
+	model := store.FromGuildSpec(spec, "org-lifecycle", "user-lifecycle")
 	if err := db.CreateGuild(model); err != nil {
 		t.Fatalf("create guild: %v", err)
 	}
