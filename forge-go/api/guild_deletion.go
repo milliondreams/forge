@@ -120,7 +120,7 @@ func (s *Server) activeGuildWorkloads(ctx context.Context, model *store.GuildMod
 
 func (s *Server) forceStopGuild(ctx context.Context, model *store.GuildModel) error {
 	if s.controlPusher == nil {
-		return fmt.Errorf("Forge control plane is unavailable")
+		return fmt.Errorf("forge control plane is unavailable")
 	}
 	managerID := model.ID + "#manager_agent"
 	if err := protocol.PushStopRequest(ctx, s.controlPusher, protocol.StopRequest{RequestID: "delete-" + idgen.NewShortUUID(), OrganizationID: model.OrganizationID, GuildID: model.ID, AgentID: managerID}); err != nil {

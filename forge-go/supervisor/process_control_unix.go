@@ -38,16 +38,6 @@ func processGroupID(pid int) int {
 	return pgid
 }
 
-func terminateProcessTree(pid, pgid int, detach bool) error {
-	return terminateProcessTreeWithTimeout(
-		pid,
-		pgid,
-		detach,
-		processTerminationGracePeriod,
-		processTerminationKillWait,
-	)
-}
-
 func terminateProcessTreeWithTimeout(pid, pgid int, detach bool, gracePeriod, killWait time.Duration) error {
 	if pgid <= 0 {
 		pgid = processGroupID(pid)
