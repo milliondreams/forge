@@ -103,6 +103,7 @@ type LaunchGuildFromBlueprintRequest struct {
 	Configuration map[string]interface{} `json:"configuration"`
 	PreflightID   string                 `json:"preflight_id"`
 	Fingerprint   string                 `json:"fingerprint"`
+	PreparationID string                 `json:"preparation_id"`
 }
 
 type AgentEntryResponse struct {

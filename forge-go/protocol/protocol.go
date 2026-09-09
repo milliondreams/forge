@@ -44,6 +44,29 @@ type StopRequest struct {
 	AgentID        string `json:"agent_id"`
 }
 
+const (
+	PrepareRuntimePython           = "python_runtime"
+	PrepareRuntimeAgentEnvironment = "agent_environment"
+	RuntimePreparationV1Capability = "runtime_preparation_v1"
+)
+
+// PrepareRuntimeRequest asks a worker to populate its local UV cache without
+// starting an agent process.
+type PrepareRuntimeRequest struct {
+	RequestID      string    `json:"request_id"`
+	OrganizationID string    `json:"organization_id,omitempty"`
+	GuildID        string    `json:"guild_id"`
+	Kind           string    `json:"kind"`
+	AgentSpec      AgentSpec `json:"agent_spec,omitempty"`
+}
+
+type PrepareRuntimeResponse struct {
+	RequestID string `json:"request_id"`
+	Success   bool   `json:"success"`
+	NodeID    string `json:"node_id,omitempty"`
+	Cached    bool   `json:"cached,omitempty"`
+}
+
 type SpawnResponse struct {
 	RequestID string `json:"request_id"`
 	Success   bool   `json:"success"`

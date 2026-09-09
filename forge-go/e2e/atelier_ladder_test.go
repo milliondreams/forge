@@ -234,6 +234,30 @@ func launchGuildFromBlueprint(
 	require.True(t, preflight.Ready, "preflight blocked: %s", string(preflightBody))
 	body["preflight_id"] = preflight.ID
 	body["fingerprint"] = preflight.Fingerprint
+	preparationBody, status := postJSON(t, client, endpoint+"/preparations", body, nil)
+	require.Contains(t, []int{http.StatusOK, http.StatusAccepted}, status, "prepare launch failed: %s", string(preparationBody))
+	var preparation struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(preparationBody, &preparation))
+	preparationDeadline := time.Now().Add(2 * time.Minute)
+	for preparation.Status == "queued" || preparation.Status == "preparing" {
+		require.True(t, time.Now().Before(preparationDeadline), "launch preparation timed out")
+		time.Sleep(100 * time.Millisecond)
+		response, err := client.Get(fmt.Sprintf("%s/catalog/launch-preparations/%s", base, url.PathEscape(preparation.ID)))
+		require.NoError(t, err)
+		preparationBody, err = io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode, "get preparation failed: %s", string(preparationBody))
+		require.NoError(t, json.Unmarshal(preparationBody, &preparation))
+	}
+	require.Equal(t, "ready", preparation.Status, "launch preparation failed: %s", string(preparationBody))
+	body["preparation_id"] = preparation.ID
 	respBody, status := postJSON(t, client, endpoint, body, nil)
 	require.Equal(t, http.StatusCreated, status, "launch guild failed: %s", string(respBody))
 	var idResp struct {

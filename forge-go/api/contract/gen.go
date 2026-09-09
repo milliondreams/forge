@@ -173,6 +173,54 @@ func (e LaunchPreflightResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for LaunchPreparationResponsePhase.
+const (
+	AgentEnvironments LaunchPreparationResponsePhase = "agent_environments"
+	Complete          LaunchPreparationResponsePhase = "complete"
+	PythonRuntime     LaunchPreparationResponsePhase = "python_runtime"
+)
+
+// Valid indicates whether the value is a known member of the LaunchPreparationResponsePhase enum.
+func (e LaunchPreparationResponsePhase) Valid() bool {
+	switch e {
+	case AgentEnvironments:
+		return true
+	case Complete:
+		return true
+	case PythonRuntime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LaunchPreparationResponseStatus.
+const (
+	LaunchPreparationResponseStatusCanceled  LaunchPreparationResponseStatus = "canceled"
+	LaunchPreparationResponseStatusFailed    LaunchPreparationResponseStatus = "failed"
+	LaunchPreparationResponseStatusPreparing LaunchPreparationResponseStatus = "preparing"
+	LaunchPreparationResponseStatusQueued    LaunchPreparationResponseStatus = "queued"
+	LaunchPreparationResponseStatusReady     LaunchPreparationResponseStatus = "ready"
+)
+
+// Valid indicates whether the value is a known member of the LaunchPreparationResponseStatus enum.
+func (e LaunchPreparationResponseStatus) Valid() bool {
+	switch e {
+	case LaunchPreparationResponseStatusCanceled:
+		return true
+	case LaunchPreparationResponseStatusFailed:
+		return true
+	case LaunchPreparationResponseStatusPreparing:
+		return true
+	case LaunchPreparationResponseStatusQueued:
+		return true
+	case LaunchPreparationResponseStatusReady:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LaunchRequirementKind.
 const (
 	Oauth  LaunchRequirementKind = "oauth"
@@ -932,6 +980,7 @@ type LaunchGuildFromBlueprintRequest struct {
 	GuildName     string                  `json:"guild_name"`
 	OrgId         string                  `json:"org_id"`
 	PreflightId   string                  `json:"preflight_id"`
+	PreparationId string                  `json:"preparation_id"`
 	UserId        string                  `json:"user_id"`
 }
 
@@ -981,6 +1030,43 @@ type LaunchPreflightResponse struct {
 
 // LaunchPreflightResponseStatus defines model for LaunchPreflightResponse.Status.
 type LaunchPreflightResponseStatus string
+
+// LaunchPreparationError defines model for LaunchPreparationError.
+type LaunchPreparationError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// LaunchPreparationRequest Exact blueprint launch intent to prepare before launch.
+type LaunchPreparationRequest struct {
+	Configuration *map[string]interface{} `json:"configuration,omitempty"`
+	Description   *string                 `json:"description,omitempty"`
+	Fingerprint   string                  `json:"fingerprint"`
+	GuildId       string                  `json:"guild_id"`
+	GuildName     string                  `json:"guild_name"`
+	OrgId         string                  `json:"org_id"`
+	PreflightId   string                  `json:"preflight_id"`
+	UserId        string                  `json:"user_id"`
+}
+
+// LaunchPreparationResponse defines model for LaunchPreparationResponse.
+type LaunchPreparationResponse struct {
+	CachedUnits    int                             `json:"cached_units"`
+	CompletedUnits int                             `json:"completed_units"`
+	Error          *LaunchPreparationError         `json:"error,omitempty"`
+	ExpiresAt      time.Time                       `json:"expires_at"`
+	Fingerprint    string                          `json:"fingerprint"`
+	Id             string                          `json:"id"`
+	Phase          LaunchPreparationResponsePhase  `json:"phase"`
+	Status         LaunchPreparationResponseStatus `json:"status"`
+	TotalUnits     int                             `json:"total_units"`
+}
+
+// LaunchPreparationResponsePhase defines model for LaunchPreparationResponse.Phase.
+type LaunchPreparationResponsePhase string
+
+// LaunchPreparationResponseStatus defines model for LaunchPreparationResponse.Status.
+type LaunchPreparationResponseStatus string
 
 // LaunchRequirement defines model for LaunchRequirement.
 type LaunchRequirement struct {
@@ -1831,6 +1917,9 @@ type LaunchGuildFromBlueprintJSONRequestBody = LaunchGuildFromBlueprintRequest
 // PreflightGuildFromBlueprintJSONRequestBody defines body for PreflightGuildFromBlueprint for application/json ContentType.
 type PreflightGuildFromBlueprintJSONRequestBody = LaunchPreflightRequest
 
+// CreateLaunchPreparationJSONRequestBody defines body for CreateLaunchPreparation for application/json ContentType.
+type CreateLaunchPreparationJSONRequestBody = LaunchPreparationRequest
+
 // AddBlueprintAgentIconsJSONRequestBody defines body for AddBlueprintAgentIcons for application/json ContentType.
 type AddBlueprintAgentIconsJSONRequestBody = BlueprintAgentsIconReqRes
 
@@ -2634,6 +2723,9 @@ type ServerInterface interface {
 	// PreflightGuildFromBlueprint Preflight Guild From Blueprint
 	// (POST /catalog/blueprints/{blueprint_id}/guilds/preflight)
 	PreflightGuildFromBlueprint(c *gin.Context, blueprintId string)
+	// CreateLaunchPreparation Create Launch Preparation
+	// (POST /catalog/blueprints/{blueprint_id}/guilds/preparations)
+	CreateLaunchPreparation(c *gin.Context, blueprintId string)
 	// GetBlueprintAgentIcons Get Bp Agent Icons
 	// (GET /catalog/blueprints/{blueprint_id}/icons/)
 	GetBlueprintAgentIcons(c *gin.Context, blueprintId string, params GetBlueprintAgentIconsParams)
@@ -2697,6 +2789,12 @@ type ServerInterface interface {
 	// ConfigureLaunchSecret Configure an opaque launch secret requirement
 	// (POST /catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/secret)
 	ConfigureLaunchSecret(c *gin.Context, preflightId string, requirementId string)
+	// CancelLaunchPreparation Cancel Launch Preparation
+	// (DELETE /catalog/launch-preparations/{preparation_id})
+	CancelLaunchPreparation(c *gin.Context, preparationId string)
+	// GetLaunchPreparation Get Launch Preparation
+	// (GET /catalog/launch-preparations/{preparation_id})
+	GetLaunchPreparation(c *gin.Context, preparationId string)
 	// GetOrganizationBlueprints Get Organization Blueprints
 	// (GET /catalog/organizations/{organization_id}/blueprints/owned/)
 	GetOrganizationBlueprints(c *gin.Context, organizationId string, params GetOrganizationBlueprintsParams)
@@ -3884,6 +3982,31 @@ func (siw *ServerInterfaceWrapper) PreflightGuildFromBlueprint(c *gin.Context) {
 	siw.Handler.PreflightGuildFromBlueprint(c, blueprintId)
 }
 
+// CreateLaunchPreparation operation middleware
+func (siw *ServerInterfaceWrapper) CreateLaunchPreparation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "blueprint_id" -------------
+	var blueprintId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "blueprint_id", c.Param("blueprint_id"), &blueprintId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter blueprint_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateLaunchPreparation(c, blueprintId)
+}
+
 // GetBlueprintAgentIcons operation middleware
 func (siw *ServerInterfaceWrapper) GetBlueprintAgentIcons(c *gin.Context) {
 
@@ -4679,6 +4802,56 @@ func (siw *ServerInterfaceWrapper) ConfigureLaunchSecret(c *gin.Context) {
 	siw.Handler.ConfigureLaunchSecret(c, preflightId, requirementId)
 }
 
+// CancelLaunchPreparation operation middleware
+func (siw *ServerInterfaceWrapper) CancelLaunchPreparation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "preparation_id" -------------
+	var preparationId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "preparation_id", c.Param("preparation_id"), &preparationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter preparation_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CancelLaunchPreparation(c, preparationId)
+}
+
+// GetLaunchPreparation operation middleware
+func (siw *ServerInterfaceWrapper) GetLaunchPreparation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "preparation_id" -------------
+	var preparationId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "preparation_id", c.Param("preparation_id"), &preparationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter preparation_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetLaunchPreparation(c, preparationId)
+}
+
 // GetOrganizationBlueprints operation middleware
 func (siw *ServerInterfaceWrapper) GetOrganizationBlueprints(c *gin.Context) {
 
@@ -5452,6 +5625,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id", wrapper.GetBlueprintById)
 	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/guilds", wrapper.LaunchGuildFromBlueprint)
 	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/guilds/preflight", wrapper.PreflightGuildFromBlueprint)
+	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/guilds/preparations", wrapper.CreateLaunchPreparation)
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/", wrapper.GetBlueprintAgentIcons)
 	router.POST(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/", wrapper.AddBlueprintAgentIcons)
 	router.GET(options.BaseURL+"/catalog/blueprints/:blueprint_id/icons/:agent_name", wrapper.GetBlueprintAgentIconByName)
@@ -5473,6 +5647,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/catalog/guilds/:guild_id/users/:user_id", wrapper.AddUserToGuild)
 	router.POST(options.BaseURL+"/catalog/launch-preflights/:preflight_id/requirements/:requirement_id/oauth", wrapper.AuthorizeLaunchOAuth)
 	router.POST(options.BaseURL+"/catalog/launch-preflights/:preflight_id/requirements/:requirement_id/secret", wrapper.ConfigureLaunchSecret)
+	router.DELETE(options.BaseURL+"/catalog/launch-preparations/:preparation_id", wrapper.CancelLaunchPreparation)
+	router.GET(options.BaseURL+"/catalog/launch-preparations/:preparation_id", wrapper.GetLaunchPreparation)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/blueprints/owned/", wrapper.GetOrganizationBlueprints)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/blueprints/shared/", wrapper.GetSharedBlueprintsByOrganizationId)
 	router.GET(options.BaseURL+"/catalog/organizations/:organization_id/guilds/", wrapper.GetGuildsForOrganization)

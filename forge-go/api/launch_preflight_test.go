@@ -95,6 +95,7 @@ func TestLaunchPreflightIsMandatoryOpaqueAndRemediable(t *testing.T) {
 	ready := performPreflightRequest(t, server, blueprint.ID, launchRequest)
 	require.True(t, ready.Ready)
 	launchRequest.PreflightID, launchRequest.Fingerprint = ready.ID, ready.Fingerprint
+	authorizePreparedLaunchForTest(server, blueprint.ID, &launchRequest)
 	launchBody, _ := json.Marshal(launchRequest)
 	launchHTTP := httptest.NewRequest(http.MethodPost, "/catalog/blueprints/"+blueprint.ID+"/guilds", bytes.NewReader(launchBody))
 	launchHTTP.SetPathValue("id", blueprint.ID)
@@ -114,6 +115,7 @@ func TestLaunchRejectsExpiredPreflightWithCurrentSnapshot(t *testing.T) {
 	server.launchPreflights.mu.Unlock()
 
 	request.PreflightID, request.Fingerprint = preflight.ID, preflight.Fingerprint
+	request.PreparationID = "unused-preparation"
 	body, _ := json.Marshal(request)
 	httpRequest := httptest.NewRequest(http.MethodPost, "/catalog/blueprints/"+blueprint.ID+"/guilds", bytes.NewReader(body))
 	httpRequest.SetPathValue("id", blueprint.ID)
@@ -133,6 +135,7 @@ func TestLaunchRejectsPreflightForAnotherIdentity(t *testing.T) {
 
 	request.UserID = "another-user"
 	request.PreflightID, request.Fingerprint = preflight.ID, preflight.Fingerprint
+	request.PreparationID = "unused-preparation"
 	body, _ := json.Marshal(request)
 	httpRequest := httptest.NewRequest(http.MethodPost, "/catalog/blueprints/"+blueprint.ID+"/guilds", bytes.NewReader(body))
 	httpRequest.SetPathValue("id", blueprint.ID)

@@ -19,24 +19,21 @@ func NewScheduler(reg *NodeRegistry) *Scheduler {
 }
 
 func (s *Scheduler) Schedule(agentSpec protocol.AgentSpec) (string, error) {
+	return s.schedule(agentSpec, "")
+}
+
+func (s *Scheduler) ScheduleForCapability(agentSpec protocol.AgentSpec, capability string) (string, error) {
+	return s.schedule(agentSpec, capability)
+}
+
+func (s *Scheduler) schedule(agentSpec protocol.AgentSpec, capability string) (string, error) {
 	start := time.Now()
 	defer func() {
 		telemetry.ObserveSchedulerPlacementDuration(time.Since(start))
 	}()
 
-	var reqCPUs, reqMem, reqGPUs int
-
-	if agentSpec.Resources.NumCPUs != nil {
-		reqCPUs = int(*agentSpec.Resources.NumCPUs)
-	}
-	if agentSpec.Resources.NumGPUs != nil {
-		reqGPUs = int(*agentSpec.Resources.NumGPUs)
-	}
-	if agentSpec.Resources.CustomResources != nil {
-		if mem, ok := agentSpec.Resources.CustomResources["memory"].(float64); ok {
-			reqMem = int(mem)
-		}
-	}
+	requested := RequestedCapacity(agentSpec)
+	reqCPUs, reqMem, reqGPUs := requested.CPUs, requested.Memory, requested.GPUs
 
 	nodes := s.registry.ListHealthy()
 	if len(nodes) == 0 {
@@ -49,6 +46,9 @@ func (s *Scheduler) Schedule(agentSpec protocol.AgentSpec) (string, error) {
 	requiredProfiles := dependencyProfiles(agentSpec)
 
 	for _, n := range nodes {
+		if capability != "" && !s.registry.Supports(n.NodeID, capability) {
+			continue
+		}
 		if !nodeReadyFor(&n, requiredProfiles) {
 			continue
 		}
@@ -71,13 +71,25 @@ func (s *Scheduler) Schedule(agentSpec protocol.AgentSpec) (string, error) {
 		return "", fmt.Errorf("no node with sufficient capacity [%d cpus, %d mem, %d gpus]", reqCPUs, reqMem, reqGPUs)
 	}
 
-	s.registry.AllocateCapacity(bestNode, ResourceCapacity{
-		CPUs:   reqCPUs,
-		Memory: reqMem,
-		GPUs:   reqGPUs,
-	})
+	s.registry.AllocateCapacity(bestNode, requested)
 
 	return bestNode, nil
+}
+
+func RequestedCapacity(agentSpec protocol.AgentSpec) ResourceCapacity {
+	var requested ResourceCapacity
+	if agentSpec.Resources.NumCPUs != nil {
+		requested.CPUs = int(*agentSpec.Resources.NumCPUs)
+	}
+	if agentSpec.Resources.NumGPUs != nil {
+		requested.GPUs = int(*agentSpec.Resources.NumGPUs)
+	}
+	if agentSpec.Resources.CustomResources != nil {
+		if memory, ok := agentSpec.Resources.CustomResources["memory"].(float64); ok {
+			requested.Memory = int(memory)
+		}
+	}
+	return requested
 }
 
 func dependencyProfiles(agentSpec protocol.AgentSpec) []string {

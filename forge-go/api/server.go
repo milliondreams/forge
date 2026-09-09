@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rustic-ai/forge/forge-go/api/contract"
+	"github.com/rustic-ai/forge/forge-go/control"
 	"github.com/rustic-ai/forge/forge-go/filesystem"
 	"github.com/rustic-ai/forge/forge-go/forgepath"
 	"github.com/rustic-ai/forge/forge-go/gateway"
@@ -41,10 +42,18 @@ type Server struct {
 	secretManager      *secrets.Manager
 	credentialRegistry *registry.Registry
 	launchPreflights   *launchPreflightCache
+	launchPreparations *launchPreparationStore
+	preparationControl control.ControlPlane
 	configurationError error
 	dataDir            string
 	listenAddr         string
 	server             *http.Server
+}
+
+func (s *Server) WithLaunchPreparationControl(controlPlane control.ControlPlane) *Server {
+	s.preparationControl = controlPlane
+	s.launchPreparations = newLaunchPreparationStore()
+	return s
 }
 
 func NewServer(db store.Store, statusStore supervisor.AgentStatusStore, controlPusher protocol.ControlPusher, mc messaging.Backend, fs *filesystem.LocalFileStore, listenAddr string) *Server {

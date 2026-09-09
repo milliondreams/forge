@@ -25,6 +25,7 @@ import (
 	"github.com/rustic-ai/forge/forge-go/helper/logging"
 	"github.com/rustic-ai/forge/forge-go/infraevents"
 	"github.com/rustic-ai/forge/forge-go/messaging"
+	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/registry"
 	"github.com/rustic-ai/forge/forge-go/scheduler"
 	"github.com/rustic-ai/forge/forge-go/secrets"
@@ -172,9 +173,16 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 		NodeID                  string                     `json:"node_id"`
 		Capacity                scheduler.ResourceCapacity `json:"capacity"`
 		ReadyDependencyProfiles []string                   `json:"ready_dependency_profiles"`
+		Capabilities            []string                   `json:"capabilities"`
 	}{
 		NodeID:                  config.NodeID,
 		ReadyDependencyProfiles: readyProfiles,
+		Capabilities: func() []string {
+			if dependencies.SupportsRuntimePreparation(config.DependencyPrewarmMode, registry.UVPython()) {
+				return []string{protocol.RuntimePreparationV1Capability}
+			}
+			return []string{}
+		}(),
 		Capacity: scheduler.ResourceCapacity{
 			CPUs:   config.CPUs,
 			Memory: config.Memory,
@@ -237,7 +245,7 @@ func StartClient(ctx context.Context, config *ClientConfig) error {
 		return fmt.Errorf("failed to start node queue listener: %w", err)
 	}
 	if dependencyPrewarmer != nil {
-		dependencyPrewarmer.WarmSystem()
+		dependencyPrewarmer.WarmPython()
 	}
 
 	go func() {

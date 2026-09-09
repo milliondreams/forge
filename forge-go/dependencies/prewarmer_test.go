@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rustic-ai/forge/forge-go/forgepath"
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/registry"
 )
@@ -221,7 +222,7 @@ func TestCoordinatorCancellationReleasesJoinedWaiters(t *testing.T) {
 	}
 }
 
-func TestPrepareGuildWaitsOnlyForManager(t *testing.T) {
+func TestPrepareGuildWaitsForEveryStaticAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reg := testRegistry(t)
@@ -243,13 +244,97 @@ func TestPrepareGuildWaitsOnlyForManager(t *testing.T) {
 	<-staticStarted
 	select {
 	case err := <-done:
+		t.Fatalf("guild preparation completed before static agent: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(staticRelease)
+	select {
+	case err := <-done:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("manager preparation waited for static agent")
+		t.Fatal("guild preparation did not complete after static agent")
 	}
-	close(staticRelease)
+}
+
+func TestPreparePythonInstallsExactManagedVersionWithPersistentUVPaths(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var executable string
+	var args, env []string
+	c, err := NewCoordinator(Config{
+		Context: ctx, Registry: testRegistry(t), UVXPath: "uvx", UVPath: "uv",
+		Python: "3.13.13", UVVersion: "uvx 1", ForgeRevision: "revision",
+		Run: func(_ context.Context, gotExecutable string, gotArgs, gotEnv []string) error {
+			executable = gotExecutable
+			args = append([]string(nil), gotArgs...)
+			env = append([]string(nil), gotEnv...)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PreparePython(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if executable != "uv" || strings.Join(args, " ") != "python install 3.13.13" {
+		t.Fatalf("command = %q %q", executable, args)
+	}
+	joined := strings.Join(env, "\n")
+	for _, expected := range []string{
+		"UV_CACHE_DIR=" + forgepath.Resolve("uv_cache"),
+		"UV_PYTHON_INSTALL_DIR=" + forgepath.Resolve("python"),
+		"UV_PYTHON_DOWNLOADS=automatic",
+		"UV_MANAGED_PYTHON=1",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("environment does not contain %q: %s", expected, joined)
+		}
+	}
+}
+
+func TestPreparePythonRejectsSystemInterpreterAndRetriesFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg := testRegistry(t)
+	system, err := NewCoordinator(Config{
+		Context: ctx, Registry: reg, UVXPath: "uvx", UVPath: "uv", Python: "/usr/bin/python3",
+		UVVersion: "uvx 1", ForgeRevision: "revision",
+		Run: func(context.Context, string, []string, []string) error {
+			t.Fatal("system interpreter must not be executed for managed preparation")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := system.PreparePython(ctx); err == nil || !strings.Contains(err.Error(), "requires a managed Python version") {
+		t.Fatalf("system Python error = %v", err)
+	}
+
+	attempts := 0
+	retrying, err := NewCoordinator(Config{
+		Context: ctx, Registry: reg, UVXPath: "uvx", UVPath: "uv", Python: "3.13.13",
+		UVVersion: "uvx 1", ForgeRevision: "revision",
+		Run: func(context.Context, string, []string, []string) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("offline")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retrying.PreparePython(ctx); err == nil {
+		t.Fatal("first managed Python attempt unexpectedly succeeded")
+	}
+	if err := retrying.PreparePython(ctx); err != nil {
+		t.Fatalf("explicit retry failed: %v", err)
+	}
 }
 
 func TestSanitizeOutputRemovesURLCredentials(t *testing.T) {

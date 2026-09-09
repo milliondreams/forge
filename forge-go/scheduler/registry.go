@@ -20,6 +20,7 @@ type NodeState struct {
 	TotalCapacity           ResourceCapacity `json:"total_capacity"`
 	UsedCapacity            ResourceCapacity `json:"used_capacity"`
 	ReadyDependencyProfiles []string         `json:"ready_dependency_profiles"`
+	Capabilities            []string         `json:"capabilities"`
 	LastHeartbeat           time.Time        `json:"last_heartbeat"`
 }
 
@@ -35,16 +36,21 @@ func NewNodeRegistry() *NodeRegistry {
 }
 
 func (r *NodeRegistry) Register(nodeID string, capacity ResourceCapacity) {
-	r.RegisterWithReadiness(nodeID, capacity, nil)
+	r.RegisterWithCapabilities(nodeID, capacity, nil, nil)
 }
 
 func (r *NodeRegistry) RegisterWithReadiness(nodeID string, capacity ResourceCapacity, profiles []string) {
+	r.RegisterWithCapabilities(nodeID, capacity, profiles, nil)
+}
+
+func (r *NodeRegistry) RegisterWithCapabilities(nodeID string, capacity ResourceCapacity, profiles, capabilities []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if state, exists := r.nodes[nodeID]; exists {
 		state.TotalCapacity = capacity
 		state.ReadyDependencyProfiles = normalizedProfileKeys(profiles)
+		state.Capabilities = normalizedProfileKeys(capabilities)
 		state.LastHeartbeat = time.Now()
 	} else {
 		r.nodes[nodeID] = &NodeState{
@@ -52,10 +58,26 @@ func (r *NodeRegistry) RegisterWithReadiness(nodeID string, capacity ResourceCap
 			TotalCapacity:           capacity,
 			UsedCapacity:            ResourceCapacity{},
 			ReadyDependencyProfiles: normalizedProfileKeys(profiles),
+			Capabilities:            normalizedProfileKeys(capabilities),
 			LastHeartbeat:           time.Now(),
 		}
 	}
 	r.recordMetricsLocked()
+}
+
+func (r *NodeRegistry) Supports(nodeID, capability string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	state := r.nodes[nodeID]
+	if state == nil || time.Since(state.LastHeartbeat) >= 10*time.Second {
+		return false
+	}
+	for _, value := range state.Capabilities {
+		if value == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *NodeRegistry) Heartbeat(nodeID string) bool {

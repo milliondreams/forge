@@ -15,15 +15,15 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func RegisterCatalogRoutes(mux *http.ServeMux, s store.Store) {
-	registerCatalogRoutes(mux, s, nil)
+func RegisterCatalogRoutes(mux *http.ServeMux, s store.Store) *Server {
+	return registerCatalogRoutes(mux, s, nil)
 }
 
-func RegisterCatalogRoutesWithRuntime(mux *http.ServeMux, s store.Store, pusher protocol.ControlPusher) {
-	registerCatalogRoutes(mux, s, pusher)
+func RegisterCatalogRoutesWithRuntime(mux *http.ServeMux, s store.Store, pusher protocol.ControlPusher) *Server {
+	return registerCatalogRoutes(mux, s, pusher)
 }
 
-func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.ControlPusher) {
+func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.ControlPusher) *Server {
 	authority := &Server{store: s, controlPusher: pusher, launchPreflights: newLaunchPreflightCache()}
 	mux.HandleFunc("POST /catalog/blueprints", handleCreateBlueprint(s))
 	mux.HandleFunc("GET /catalog/blueprints", handleListBlueprints(s))
@@ -70,6 +70,7 @@ func registerCatalogRoutes(mux *http.ServeMux, s store.Store, pusher protocol.Co
 
 	mux.HandleFunc("POST /catalog/blueprints/{blueprint_id}/guilds/preflight", authority.handlePreflightGuildFromBlueprint())
 	mux.HandleFunc("POST /catalog/blueprints/{id}/guilds", handleLaunchGuildFromBlueprint(authority))
+	return authority
 }
 
 func handleListBlueprints(s store.Store) http.HandlerFunc {
@@ -1212,8 +1213,8 @@ func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 			ReplyError(w, http.StatusUnprocessableEntity, "guild_name, user_id and org_id are required")
 			return
 		}
-		if strings.TrimSpace(req.PreflightID) == "" || strings.TrimSpace(req.Fingerprint) == "" {
-			ReplyError(w, http.StatusUnprocessableEntity, "preflight_id and fingerprint are required")
+		if strings.TrimSpace(req.PreflightID) == "" || strings.TrimSpace(req.Fingerprint) == "" || strings.TrimSpace(req.PreparationID) == "" {
+			ReplyError(w, http.StatusUnprocessableEntity, "preflight_id, fingerprint and preparation_id are required")
 			return
 		}
 
@@ -1256,6 +1257,11 @@ func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 			ReplyJSON(w, http.StatusPreconditionFailed, current)
 			return
 		}
+		preparation, preparationCode := server.validateLaunchPreparation(req.PreparationID, req, blueprintID, current.Fingerprint)
+		if preparation == nil {
+			replyPreparationPrecondition(w, preparationCode, "launch preparation is missing, stale, or no longer ready")
+			return
+		}
 
 		var model *store.GuildModel
 		if server.controlPusher != nil {
@@ -1279,6 +1285,7 @@ func handleLaunchGuildFromBlueprint(server *Server) http.HandlerFunc {
 			ReplyError(w, http.StatusInternalServerError, "failed to associate blueprint with guild: "+err.Error())
 			return
 		}
+		server.consumeLaunchPreparation(preparation)
 
 		ReplyJSON(w, http.StatusCreated, map[string]string{"id": model.ID})
 	}

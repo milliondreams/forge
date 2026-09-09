@@ -25,11 +25,12 @@ type ControlMessageWrapper struct {
 
 // ControlQueueListener listens for and dispatches incoming control requests.
 type ControlQueueListener struct {
-	transport       ControlTransport
-	requestQueueKey string
-	stopCh          chan struct{}
-	OnSpawn         func(ctx context.Context, req *protocol.SpawnRequest)
-	OnStop          func(ctx context.Context, req *protocol.StopRequest)
+	transport        ControlTransport
+	requestQueueKey  string
+	stopCh           chan struct{}
+	OnSpawn          func(ctx context.Context, req *protocol.SpawnRequest)
+	OnStop           func(ctx context.Context, req *protocol.StopRequest)
+	OnPrepareRuntime func(ctx context.Context, req *protocol.PrepareRuntimeRequest)
 }
 
 // NewControlQueueListener creates a listener on the default control queue.
@@ -79,6 +80,17 @@ func (l *ControlQueueListener) Start(ctx context.Context) {
 			}
 
 			switch wrapper.Command {
+			case "prepare_runtime":
+				if l.OnPrepareRuntime != nil {
+					var req protocol.PrepareRuntimeRequest
+					if err := json.Unmarshal(wrapper.Payload, &req); err == nil {
+						telemetry.AddQueueConsume(l.requestQueueKey, "prepare_runtime")
+						go l.OnPrepareRuntime(ctx, &req)
+					} else {
+						telemetry.AddQueueProcessingError(l.requestQueueKey, "prepare_runtime", "json_unmarshal")
+						slog.Error("ControlQueueListener failed to parse PrepareRuntimeRequest payload", "err", err)
+					}
+				}
 			case "spawn":
 				if l.OnSpawn != nil {
 					var req protocol.SpawnRequest

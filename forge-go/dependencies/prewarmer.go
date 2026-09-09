@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -39,6 +40,13 @@ func Enabled(mode string) bool {
 	return strings.EqualFold(strings.TrimSpace(mode), ModeGuild)
 }
 
+// SupportsRuntimePreparation reports whether this worker can honor the v1
+// preparation contract with a uv-managed interpreter request.
+func SupportsRuntimePreparation(mode, python string) bool {
+	python = strings.TrimSpace(python)
+	return Enabled(mode) && python != "" && !filepath.IsAbs(python)
+}
+
 type Metadata struct {
 	GuildID        string
 	AgentID        string
@@ -53,6 +61,7 @@ type Config struct {
 	NodeID        string
 	Workers       int
 	UVXPath       string
+	UVPath        string
 	Python        string
 	UVVersion     string
 	ForgeRevision string
@@ -99,15 +108,18 @@ type Coordinator struct {
 	publisher     *infraevents.Publisher
 	nodeID        string
 	uvxPath       string
+	uvPath        string
 	python        string
 	uvVersion     string
 	forgeRevision string
 	run           func(context.Context, string, []string, []string) error
 	queue         chan work
 
-	mu       sync.Mutex
-	inflight map[string]*preparation
-	ready    map[string]struct{}
+	mu                sync.Mutex
+	inflight          map[string]*preparation
+	ready             map[string]struct{}
+	pythonPreparation *preparation
+	pythonReady       bool
 }
 
 func NewCoordinator(cfg Config) (*Coordinator, error) {
@@ -122,6 +134,9 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	}
 	if cfg.UVXPath == "" {
 		cfg.UVXPath = registry.ResolveUVXCommand()
+	}
+	if cfg.UVPath == "" {
+		cfg.UVPath = registry.ResolveUVCommand()
 	}
 	if cfg.Python == "" {
 		cfg.Python = registry.UVPython()
@@ -142,6 +157,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		publisher:     cfg.Publisher,
 		nodeID:        cfg.NodeID,
 		uvxPath:       cfg.UVXPath,
+		uvPath:        cfg.UVPath,
 		python:        cfg.Python,
 		uvVersion:     cfg.UVVersion,
 		forgeRevision: cfg.ForgeRevision,
@@ -227,29 +243,104 @@ func (c *Coordinator) WarmSystem() {
 	_, _ = c.schedule(Metadata{}, requirements, args)
 }
 
-// PrepareGuild schedules the manager first and all static agents behind it, then
-// waits only for the manager's exact environment.
+// WarmPython starts managed-Python preparation without affecting worker
+// readiness. A later explicit preparation joins this work or retries it.
+func (c *Coordinator) WarmPython() {
+	_, _ = c.preparePython(context.Background())
+}
+
+// PreparePython ensures the configured interpreter is available. Version
+// requests are installed through uv. Preparation-capable workers reject
+// system interpreter paths so prepared and spawned environments share the
+// Forge-owned managed runtime.
+func (c *Coordinator) PreparePython(ctx context.Context) error {
+	prep, err := c.preparePython(ctx)
+	if err != nil {
+		return &PreparationError{Err: fmt.Errorf("python_download_failed: %w", err)}
+	}
+	if err := wait(ctx, prep); err != nil {
+		return fmt.Errorf("python_download_failed: %w", err)
+	}
+	return nil
+}
+
+func (c *Coordinator) PythonPrepared() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pythonReady
+}
+
+func (c *Coordinator) preparePython(_ context.Context) (*preparation, error) {
+	c.mu.Lock()
+	if err := c.ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.pythonReady {
+		c.mu.Unlock()
+		prep := &preparation{done: make(chan struct{})}
+		close(prep.done)
+		return prep, nil
+	}
+	if c.pythonPreparation != nil {
+		prep := c.pythonPreparation
+		c.mu.Unlock()
+		return prep, nil
+	}
+	prep := &preparation{done: make(chan struct{})}
+	c.pythonPreparation = prep
+	c.mu.Unlock()
+
+	go func() {
+		python := strings.TrimSpace(c.python)
+		var err error
+		if python == "" || filepath.IsAbs(python) {
+			err = errors.New("runtime preparation requires a managed Python version")
+		} else {
+			err = c.run(c.ctx, c.uvPath, []string{"python", "install", python}, c.runtimeEnv())
+		}
+		c.mu.Lock()
+		if err == nil && c.ctx.Err() == nil {
+			c.pythonReady = true
+		}
+		c.pythonPreparation = nil
+		prep.complete(err)
+		c.mu.Unlock()
+	}()
+	return prep, nil
+}
+
+// PrepareGuild schedules and waits for the manager and every static UVX agent.
 func (c *Coordinator) PrepareGuild(ctx context.Context, metadata Metadata, managerEntry *registry.AgentRegistryEntry, managerExtraDeps []string, spec *protocol.GuildSpec) error {
 	managerPreparation, err := c.schedule(metadata, registry.DependencyRequirements(managerEntry, managerExtraDeps), c.argsForEntry(managerEntry, managerExtraDeps))
 	if err != nil {
 		return &PreparationError{Err: err}
 	}
+	preparations := []*preparation{managerPreparation}
 	for i := range spec.Agents {
 		agentSpec := &spec.Agents[i]
 		entry, lookupErr := c.registry.Lookup(agentSpec.ClassName)
 		if lookupErr != nil {
 			c.emit(metadataForAgent(metadata, agentSpec.ID), "dependency.prepare.failed", infraevents.SeverityError, "dependency preparation could not resolve agent class", map[string]any{"error": lookupErr.Error()})
-			continue
+			return &PreparationError{Err: lookupErr}
 		}
 		if entry.Runtime != registry.RuntimeUVX {
 			continue
 		}
 		agentMetadata := metadataForAgent(metadata, agentSpec.ID)
-		if _, scheduleErr := c.schedule(agentMetadata, registry.DependencyRequirements(entry, agentSpec.ForgeExtraDeps), c.argsForEntry(entry, agentSpec.ForgeExtraDeps)); scheduleErr != nil {
+		agentPreparation, scheduleErr := c.schedule(agentMetadata, registry.DependencyRequirements(entry, agentSpec.ForgeExtraDeps), c.argsForEntry(entry, agentSpec.ForgeExtraDeps))
+		if scheduleErr != nil {
 			c.emit(agentMetadata, "dependency.prepare.failed", infraevents.SeverityError, "dependency preparation could not be scheduled", map[string]any{"error": scheduleErr.Error()})
+			return &PreparationError{Err: scheduleErr}
+		}
+		preparations = append(preparations, agentPreparation)
+	}
+	for _, prep := range preparations {
+		if err := wait(ctx, prep); err != nil {
+			return err
 		}
 	}
-	return wait(ctx, managerPreparation)
+	return nil
 }
 
 // PrepareAgent gates one UVX spawn on its exact environment.
@@ -262,6 +353,20 @@ func (c *Coordinator) PrepareAgent(ctx context.Context, metadata Metadata, entry
 		return &PreparationError{Err: err}
 	}
 	return wait(ctx, prep)
+}
+
+func (c *Coordinator) AgentPrepared(entry *registry.AgentRegistryEntry, extraDeps []string) bool {
+	if entry.Runtime != registry.RuntimeUVX {
+		return true
+	}
+	requirements, err := normalizeRequirements(registry.DependencyRequirements(entry, extraDeps))
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ready := c.ready[c.key(requirements)]
+	return ready
 }
 
 func metadataForAgent(metadata Metadata, agentID string) Metadata {
@@ -381,11 +486,7 @@ func (c *Coordinator) worker() {
 func (c *Coordinator) execute(item work) {
 	start := time.Now()
 	c.emit(item.metadata, "dependency.prepare.started", infraevents.SeverityInfo, "dependency preparation started", map[string]any{"key": item.key, "cache_state": "uv"})
-	env := os.Environ()
-	if os.Getenv("UV_CACHE_DIR") == "" {
-		env = append(env, "UV_CACHE_DIR="+forgepath.Resolve("uv_cache"))
-	}
-	err := c.run(c.ctx, c.uvxPath, item.args, env)
+	err := c.run(c.ctx, c.uvxPath, item.args, c.runtimeEnv())
 	duration := time.Since(start)
 
 	c.mu.Lock()
@@ -403,6 +504,24 @@ func (c *Coordinator) execute(item work) {
 		return
 	}
 	c.emit(item.metadata, "dependency.prepare.completed", infraevents.SeverityInfo, "dependency preparation completed", detail)
+}
+
+func (c *Coordinator) runtimeEnv() []string {
+	env := os.Environ()
+	values := map[string]string{
+		"UV_CACHE_DIR":               forgepath.Resolve("uv_cache"),
+		"UV_PYTHON_INSTALL_DIR":      forgepath.Resolve("python"),
+		"UV_PYTHON_DOWNLOADS":        "automatic",
+		"UV_MANAGED_PYTHON":          "1",
+		"UV_PYTHON_INSTALL_REGISTRY": "0",
+		"UV_NO_PROGRESS":             "1",
+	}
+	for key, fallback := range values {
+		if os.Getenv(key) == "" {
+			env = append(env, key+"="+fallback)
+		}
+	}
+	return env
 }
 
 func (c *Coordinator) emit(metadata Metadata, kind, severity, message string, detail map[string]any) {

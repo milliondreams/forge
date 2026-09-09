@@ -29,6 +29,13 @@ func uvxExecutableName() string {
 	return "uvx"
 }
 
+func uvExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "uv.exe"
+	}
+	return "uv"
+}
+
 func bundledUVXPath() string {
 	executablePath, err := currentExecutablePath()
 	if err != nil || executablePath == "" {
@@ -39,6 +46,26 @@ func bundledUVXPath() string {
 		return uvxPath
 	}
 	return ""
+}
+
+// ResolveUVCommand returns the uv executable paired with ResolveUVXCommand.
+// Packaged Forge distributions place both binaries next to Forge; source and
+// operator-managed installs may instead resolve them from PATH or FORGE_HOME.
+func ResolveUVCommand() string {
+	if executablePath, err := currentExecutablePath(); err == nil && executablePath != "" {
+		uvPath := filepath.Join(filepath.Dir(executablePath), uvExecutableName())
+		if info, statErr := os.Stat(uvPath); statErr == nil && !info.IsDir() {
+			return uvPath
+		}
+	}
+	if _, err := execLookPath(uvExecutableName()); err == nil {
+		return uvExecutableName()
+	}
+	uvPath := forgepath.Resolve(filepath.Join("bin", uvExecutableName()))
+	if info, err := os.Stat(uvPath); err == nil && !info.IsDir() {
+		return uvPath
+	}
+	return uvExecutableName()
 }
 
 func forgeBinUVXPath() string {

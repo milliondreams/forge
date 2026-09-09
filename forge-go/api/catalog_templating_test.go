@@ -93,7 +93,7 @@ func TestLaunchBlueprint_RendersConfiguration(t *testing.T) {
 	t.Setenv("FORGE_AGENT_REGISTRY", registryPath)
 
 	mux := http.NewServeMux()
-	RegisterCatalogRoutes(mux, db)
+	authority := RegisterCatalogRoutes(mux, db)
 
 	// --- create the blueprint via the HTTP endpoint ---
 	createBody, _ := json.Marshal(BlueprintCreateRequest{
@@ -152,6 +152,7 @@ func TestLaunchBlueprint_RendersConfiguration(t *testing.T) {
 		}
 		launchRequest.PreflightID = preflight.ID
 		launchRequest.Fingerprint = preflight.Fingerprint
+		authorizePreparedLaunchForTest(authority, created.ID, &launchRequest)
 		body, _ = json.Marshal(launchRequest)
 		lreq, _ := http.NewRequest("POST", "/catalog/blueprints/"+created.ID+"/guilds", bytes.NewBuffer(body))
 		lreq.Header.Set("Content-Type", "application/json")

@@ -356,7 +356,7 @@ llm_gemini:
 	}
 
 	mux := http.NewServeMux()
-	RegisterCatalogRoutes(mux, db)
+	authority := RegisterCatalogRoutes(mux, db)
 
 	guildID := "research-chat-1"
 	reqBody := LaunchGuildFromBlueprintRequest{
@@ -377,6 +377,7 @@ llm_gemini:
 	}
 	reqBody.PreflightID = preflight.ID
 	reqBody.Fingerprint = preflight.Fingerprint
+	authorizePreparedLaunchForTest(authority, bp.ID, &reqBody)
 
 	b, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/catalog/blueprints/"+bp.ID+"/guilds", bytes.NewBuffer(b))

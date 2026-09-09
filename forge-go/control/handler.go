@@ -155,8 +155,46 @@ func newControlQueueHandler(
 
 	listener.OnSpawn = handler.handleSpawn
 	listener.OnStop = handler.handleStop
+	listener.OnPrepareRuntime = handler.handlePrepareRuntime
 
 	return handler
+}
+
+func (h *ControlQueueHandler) handlePrepareRuntime(ctx context.Context, req *protocol.PrepareRuntimeRequest) {
+	if h.dependencyPrewarmer == nil {
+		h.sendError(ctx, req.RequestID, "dependency preparation is unavailable on this worker")
+		return
+	}
+	metadata := dependencies.Metadata{
+		GuildID: req.GuildID, AgentID: req.AgentSpec.ID,
+		OrganizationID: req.OrganizationID, RequestID: req.RequestID,
+	}
+	var err error
+	cached := false
+	switch req.Kind {
+	case protocol.PrepareRuntimePython:
+		cached = h.dependencyPrewarmer.PythonPrepared()
+		err = h.dependencyPrewarmer.PreparePython(ctx)
+	case protocol.PrepareRuntimeAgentEnvironment:
+		entry, lookupErr := h.registry.Lookup(req.AgentSpec.ClassName)
+		if lookupErr != nil {
+			err = lookupErr
+		} else {
+			cached = h.dependencyPrewarmer.AgentPrepared(entry, req.AgentSpec.ForgeExtraDeps)
+			err = h.dependencyPrewarmer.PrepareAgent(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps)
+		}
+	default:
+		err = fmt.Errorf("unsupported runtime preparation kind %q", req.Kind)
+	}
+	if err != nil {
+		h.sendError(ctx, req.RequestID, err.Error())
+		return
+	}
+	if err := h.responder.SendResponse(ctx, req.RequestID, &protocol.PrepareRuntimeResponse{
+		RequestID: req.RequestID, Success: true, NodeID: h.nodeID, Cached: cached,
+	}); err != nil {
+		slog.Error("failed to send runtime preparation response", "request_id", req.RequestID, "error", err)
+	}
 }
 
 // Start spawns the background Redis BRPOP polling loop
@@ -370,11 +408,13 @@ func (h *ControlQueueHandler) handleSpawn(ctx context.Context, req *protocol.Spa
 		metadata := dependencies.Metadata{
 			GuildID: req.GuildID, AgentID: req.AgentSpec.ID, OrganizationID: orgID, RequestID: req.RequestID,
 		}
-		var prepareErr error
-		if req.AgentSpec.ID == req.GuildID+"#manager_agent" {
-			prepareErr = h.dependencyPrewarmer.PrepareGuild(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps, guildSpec)
-		} else {
-			prepareErr = h.dependencyPrewarmer.PrepareAgent(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps)
+		prepareErr := h.dependencyPrewarmer.PreparePython(ctx)
+		if prepareErr == nil {
+			if req.AgentSpec.ID == req.GuildID+"#manager_agent" {
+				prepareErr = h.dependencyPrewarmer.PrepareGuild(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps, guildSpec)
+			} else {
+				prepareErr = h.dependencyPrewarmer.PrepareAgent(ctx, metadata, entry, req.AgentSpec.ForgeExtraDeps)
+			}
 		}
 		if prepareErr != nil {
 			slog.Error("handleSpawn: dependency preparation failed", "agent_id", req.AgentSpec.ID, "error", prepareErr)

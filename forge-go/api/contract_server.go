@@ -29,6 +29,18 @@ func (s *Server) PreflightGuildFromBlueprint(c *gin.Context, blueprintID string)
 	s.dispatch(c, s.handlePreflightGuildFromBlueprint(), map[string]string{"blueprint_id": blueprintID})
 }
 
+func (s *Server) CreateLaunchPreparation(c *gin.Context, blueprintID string) {
+	s.dispatch(c, s.handleCreateLaunchPreparation(), map[string]string{"blueprint_id": blueprintID})
+}
+
+func (s *Server) GetLaunchPreparation(c *gin.Context, preparationID string) {
+	s.dispatch(c, s.handleGetLaunchPreparation(), map[string]string{"preparation_id": preparationID})
+}
+
+func (s *Server) CancelLaunchPreparation(c *gin.Context, preparationID string) {
+	s.dispatch(c, s.handleCancelLaunchPreparation(), map[string]string{"preparation_id": preparationID})
+}
+
 func (s *Server) ConfigureLaunchSecret(c *gin.Context, preflightID string, requirementID string) {
 	s.dispatch(c, s.handleLaunchSecretAction(), map[string]string{"preflight_id": preflightID, "requirement_id": requirementID})
 }

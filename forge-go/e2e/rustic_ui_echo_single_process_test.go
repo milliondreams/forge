@@ -175,6 +175,8 @@ func startSingleProcessForgeServer(t *testing.T, binPath, forgeRoot string, nats
 		"--client-node-id", "rustic-ui-single-node",
 		"--client-metrics-addr", "127.0.0.1:0",
 		"--client-default-supervisor", "process",
+		"--client-dependency-prewarm", "guild",
+		"--uv-python", "3.13.13",
 	}
 	if natsURL != "" {
 		args = append(args, "--nats", natsURL)

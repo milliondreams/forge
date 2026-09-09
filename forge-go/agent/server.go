@@ -373,7 +373,8 @@ func StartServer(ctx context.Context, cfg *ServerConfig) error {
 	httpServer := api.NewServer(db, statusStore, controlPlane, msgBackend, fileStore, cfg.ListenAddress).
 		WithDataDir(fsRoot).
 		WithObservability(cfg.TelemetryMode, cfg.TelemetrySQLiteDBPath).
-		WithModelFit("", cfg.DependencyConfig, nil)
+		WithModelFit("", cfg.DependencyConfig, nil).
+		WithLaunchPreparationControl(controlPlane)
 	if err := httpServer.ValidateConfiguration(); err != nil {
 		return err
 	}
@@ -480,14 +481,28 @@ func dispatchAcceptedSpawn(ctx context.Context, controlPlane control.ControlPlan
 		return err
 	}
 
-	nodeID, err := sched.Schedule(req.AgentSpec)
-	if err != nil {
-		placements.MarkAccepted(guildID, agentID, placement.Payload)
-		if entry, found := placements.Find(guildID, agentID); found {
-			entry.Attempts = placement.Attempts + 1
-			placements.Put(entry)
+	nodeID := ""
+	usingPreparedPlacement := false
+	if prepared, found := scheduler.GlobalPreparedPlacementMap.Find(guildID, agentID); found {
+		if !prepared.ExpiresAt.After(time.Now().UTC()) {
+			return fmt.Errorf("preparation_expired: prepared placement for agent %s expired", agentID)
 		}
-		return err
+		if !scheduler.GlobalNodeRegistry.IsHealthy(prepared.NodeID) {
+			return fmt.Errorf("prepared_node_unavailable: node %s is no longer healthy", prepared.NodeID)
+		}
+		nodeID = prepared.NodeID
+		usingPreparedPlacement = true
+	} else {
+		var err error
+		nodeID, err = sched.Schedule(req.AgentSpec)
+		if err != nil {
+			placements.MarkAccepted(guildID, agentID, placement.Payload)
+			if entry, found := placements.Find(guildID, agentID); found {
+				entry.Attempts = placement.Attempts + 1
+				placements.Put(entry)
+			}
+			return err
+		}
 	}
 
 	attempts := placements.MarkDispatched(req.GuildID, req.AgentSpec.ID, nodeID, placement.Payload)
@@ -503,6 +518,9 @@ func dispatchAcceptedSpawn(ctx context.Context, controlPlane control.ControlPlan
 			placements.Put(entry)
 		}
 		return err
+	}
+	if usingPreparedPlacement {
+		scheduler.GlobalPreparedPlacementMap.Consume(guildID, agentID)
 	}
 
 	slog.Default().Info("Scheduled accepted agent to node", "guild", req.GuildID, "agent", req.AgentSpec.ID, "node_id", nodeID, "attempt", attempts)

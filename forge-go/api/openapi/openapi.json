@@ -1835,6 +1835,10 @@
             "title": "Preflight Id",
             "type": "string"
           },
+          "preparation_id": {
+            "title": "Preparation Id",
+            "type": "string"
+          },
           "user_id": {
             "title": "User Id",
             "type": "string"
@@ -1845,9 +1849,45 @@
           "user_id",
           "org_id",
           "preflight_id",
-          "fingerprint"
+          "fingerprint",
+          "preparation_id"
         ],
         "title": "LaunchGuildFromBlueprintRequest",
+        "type": "object"
+      },
+      "LaunchPreparationRequest": {
+        "description": "Exact blueprint launch intent to prepare before launch.",
+        "properties": {
+          "configuration": {"additionalProperties": true, "default": {}, "type": "object"},
+          "description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+          "fingerprint": {"type": "string"},
+          "guild_id": {"type": "string"},
+          "guild_name": {"type": "string"},
+          "org_id": {"type": "string"},
+          "preflight_id": {"type": "string"},
+          "user_id": {"type": "string"}
+        },
+        "required": ["guild_id", "guild_name", "user_id", "org_id", "preflight_id", "fingerprint"],
+        "type": "object"
+      },
+      "LaunchPreparationError": {
+        "properties": {"code": {"type": "string"}, "message": {"type": "string"}},
+        "required": ["code", "message"],
+        "type": "object"
+      },
+      "LaunchPreparationResponse": {
+        "properties": {
+          "id": {"type": "string"},
+          "fingerprint": {"type": "string"},
+          "status": {"enum": ["queued", "preparing", "ready", "failed", "canceled"], "type": "string"},
+          "phase": {"enum": ["python_runtime", "agent_environments", "complete"], "type": "string"},
+          "completed_units": {"type": "integer"},
+          "total_units": {"type": "integer"},
+          "cached_units": {"type": "integer"},
+          "expires_at": {"format": "date-time", "type": "string"},
+          "error": {"$ref": "#/components/schemas/LaunchPreparationError"}
+        },
+        "required": ["id", "fingerprint", "status", "phase", "completed_units", "total_units", "cached_units", "expires_at"],
         "type": "object"
       },
       "LaunchRequirementAction": {
@@ -5098,6 +5138,37 @@
           "blueprints",
           "guilds"
         ]
+      }
+    },
+    "/catalog/blueprints/{blueprint_id}/guilds/preparations": {
+      "post": {
+        "operationId": "createLaunchPreparation",
+        "parameters": [{"in": "path", "name": "blueprint_id", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/LaunchPreparationRequest"}}}, "required": true},
+        "responses": {
+          "200": {"description": "Existing preparation", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LaunchPreparationResponse"}}}},
+          "202": {"description": "Preparation accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LaunchPreparationResponse"}}}},
+          "412": {"description": "Preflight is stale"},
+          "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}
+        },
+        "summary": "Create Launch Preparation",
+        "tags": ["blueprints", "guilds"]
+      }
+    },
+    "/catalog/launch-preparations/{preparation_id}": {
+      "get": {
+        "operationId": "getLaunchPreparation",
+        "parameters": [{"in": "path", "name": "preparation_id", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Preparation status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LaunchPreparationResponse"}}}}, "404": {"description": "Not found"}},
+        "summary": "Get Launch Preparation",
+        "tags": ["guilds"]
+      },
+      "delete": {
+        "operationId": "cancelLaunchPreparation",
+        "parameters": [{"in": "path", "name": "preparation_id", "required": true, "schema": {"type": "string"}}],
+        "responses": {"204": {"description": "Preparation canceled"}, "404": {"description": "Not found"}},
+        "summary": "Cancel Launch Preparation",
+        "tags": ["guilds"]
       }
     },
     "/catalog/launch-preflights/{preflight_id}/requirements/{requirement_id}/secret": {
