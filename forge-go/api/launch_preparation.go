@@ -590,5 +590,3 @@ func replyPreparationPrecondition(w http.ResponseWriter, code, message string) {
 		"preparation_error": LaunchPreparationError{Code: code, Message: message},
 	})
 }
-
-func preparationID(req LaunchGuildFromBlueprintRequest) string { return req.PreparationID }
