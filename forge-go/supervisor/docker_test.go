@@ -1,12 +1,37 @@
 package supervisor
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rustic-ai/forge/forge-go/protocol"
 	"github.com/rustic-ai/forge/forge-go/registry"
 )
+
+func TestRemapUVRuntimePathsForContainer(t *testing.T) {
+	env := []string{
+		"FOO=bar",
+		"UV_CACHE_DIR=/host/uv-cache",
+		"UV_PYTHON_INSTALL_DIR=/host/python",
+		"UV_MANAGED_PYTHON=1",
+	}
+
+	gotEnv, gotHostCacheDir := remapUVRuntimePathsForContainer(env)
+	wantEnv := []string{
+		"FOO=bar",
+		"UV_CACHE_DIR=/tmp/forge-uv-cache",
+		"UV_PYTHON_INSTALL_DIR=/tmp/forge-python",
+		"UV_MANAGED_PYTHON=1",
+	}
+
+	if gotHostCacheDir != "/host/uv-cache" {
+		t.Fatalf("expected host UV cache directory to be preserved, got %q", gotHostCacheDir)
+	}
+	if !reflect.DeepEqual(gotEnv, wantEnv) {
+		t.Fatalf("unexpected remapped environment:\nwant: %v\n got: %v", wantEnv, gotEnv)
+	}
+}
 
 func TestBuildContainerConfig_Airgapped(t *testing.T) {
 	numCPUs := 2.5
