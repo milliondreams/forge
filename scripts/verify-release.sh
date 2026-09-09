@@ -135,6 +135,13 @@ if [[ "$verification_mode" == "all" || "$verification_mode" == "checks" ]]; then
   (
     cd "$repo_root/clients/typescript"
     npm ci
+    npm run generate
+    if [[ -n "$(git status --porcelain -- src)" ]]; then
+      echo "clients/typescript/src is out of date with openapi.json." >&2
+      echo "Run 'npm run generate' in clients/typescript and commit the result." >&2
+      git --no-pager diff -- src >&2
+      exit 1
+    fi
     npm run build
     npm pack --dry-run
   )
