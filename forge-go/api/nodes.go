@@ -12,6 +12,7 @@ type NodeRegistrationRequest struct {
 	NodeID                  string                     `json:"node_id"`
 	Capacity                scheduler.ResourceCapacity `json:"capacity"`
 	ReadyDependencyProfiles []string                   `json:"ready_dependency_profiles"`
+	Capabilities            []string                   `json:"capabilities"`
 }
 
 type NodeHeartbeatRequest struct {
@@ -30,7 +31,7 @@ func RegisterNodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheduler.GlobalNodeRegistry.RegisterWithReadiness(req.NodeID, req.Capacity, req.ReadyDependencyProfiles)
+	scheduler.GlobalNodeRegistry.RegisterWithCapabilities(req.NodeID, req.Capacity, req.ReadyDependencyProfiles, req.Capabilities)
 	slog.Default().Info("Node registered", "node_id", req.NodeID, "cpus", req.Capacity.CPUs, "memory", req.Capacity.Memory)
 
 	w.WriteHeader(http.StatusCreated)

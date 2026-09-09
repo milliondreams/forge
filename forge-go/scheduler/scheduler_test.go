@@ -91,3 +91,17 @@ func TestScheduler_RequiresReportedDependencyProfiles(t *testing.T) {
 		t.Fatalf("expected hosted-ready node, got %q", nodeID)
 	}
 }
+
+func TestScheduler_RequiresRequestedCapability(t *testing.T) {
+	r := NewNodeRegistry()
+	r.RegisterWithCapabilities("legacy", ResourceCapacity{CPUs: 8, Memory: 8192}, nil, nil)
+	r.RegisterWithCapabilities("preparation", ResourceCapacity{CPUs: 2, Memory: 2048}, nil, []string{protocol.RuntimePreparationV1Capability})
+
+	nodeID, err := NewScheduler(r).ScheduleForCapability(protocol.NewAgentSpec(), protocol.RuntimePreparationV1Capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeID != "preparation" {
+		t.Fatalf("expected preparation-capable node, got %q", nodeID)
+	}
+}

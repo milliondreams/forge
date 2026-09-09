@@ -132,6 +132,15 @@ func BuildAgentEnv(
 	if uvCacheDir != "" {
 		envMap["UV_CACHE_DIR"] = uvCacheDir
 	}
+	uvPythonInstallDir := os.Getenv("UV_PYTHON_INSTALL_DIR")
+	if uvPythonInstallDir == "" {
+		uvPythonInstallDir = forgepath.Resolve("python")
+	}
+	envMap["UV_PYTHON_INSTALL_DIR"] = uvPythonInstallDir
+	envMap["UV_PYTHON_DOWNLOADS"] = envOrDefault("UV_PYTHON_DOWNLOADS", "automatic")
+	envMap["UV_MANAGED_PYTHON"] = envOrDefault("UV_MANAGED_PYTHON", "1")
+	envMap["UV_PYTHON_INSTALL_REGISTRY"] = envOrDefault("UV_PYTHON_INSTALL_REGISTRY", "0")
+	envMap["UV_NO_PROGRESS"] = envOrDefault("UV_NO_PROGRESS", "1")
 
 	// Forward Redis connection env vars so spawned containers can find the correct Redis instance.
 	// Without this, containers default to localhost:6379 instead of the intended Redis.
@@ -159,6 +168,13 @@ func BuildAgentEnv(
 	}
 
 	return result, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func resolveSecrets(

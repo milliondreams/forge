@@ -6,11 +6,13 @@ const (
 	LaunchRequirementsV2Capability = "launch_requirements_v2"
 	DependencyProfilesV1Capability = "dependency_profiles_v1"
 	GuildDeletionV1Capability      = "guild_deletion_v1"
+	LaunchPreparationV1Capability  = "launch_preparation_v1"
 )
 
 var rusticV1Capabilities = []string{
 	LaunchRequirementsV2Capability,
 	DependencyProfilesV1Capability,
+	LaunchPreparationV1Capability,
 }
 
 type RusticCapabilitiesResponse struct {

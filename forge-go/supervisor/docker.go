@@ -62,6 +62,25 @@ type DockerSupervisor struct {
 	zmqBridgeMode    BridgeTransportMode
 }
 
+const (
+	containerUVCacheDir         = "/tmp/forge-uv-cache"
+	containerUVPythonInstallDir = "/tmp/forge-python"
+)
+
+func remapUVRuntimePathsForContainer(env []string) ([]string, string) {
+	var hostUVCacheDir string
+	for i, value := range env {
+		switch {
+		case strings.HasPrefix(value, "UV_CACHE_DIR="):
+			hostUVCacheDir = strings.TrimPrefix(value, "UV_CACHE_DIR=")
+			env[i] = "UV_CACHE_DIR=" + containerUVCacheDir
+		case strings.HasPrefix(value, "UV_PYTHON_INSTALL_DIR="):
+			env[i] = "UV_PYTHON_INSTALL_DIR=" + containerUVPythonInstallDir
+		}
+	}
+	return env, hostUVCacheDir
+}
+
 // DockerSupervisorOption configures a DockerSupervisor.
 type DockerSupervisorOption func(*DockerSupervisor)
 
@@ -219,18 +238,10 @@ func (d *DockerSupervisor) Launch(ctx context.Context, guildID string, agentSpec
 
 	env = append(env, "UV_PROJECT_ENVIRONMENT=/tmp/.venv")
 
-	// Extract UV_CACHE_DIR so we can bind-mount it into the container for caching.
-	// Host cache paths (especially macOS /var paths) are not necessarily valid
-	// container paths, so expose the cache at a stable location in the container.
-	var uvCacheDir string
-	const containerUVCacheDir = "/tmp/forge-uv-cache"
-	for i, e := range env {
-		if val, ok := strings.CutPrefix(e, "UV_CACHE_DIR="); ok {
-			uvCacheDir = val
-			env[i] = "UV_CACHE_DIR=" + containerUVCacheDir
-			break
-		}
-	}
+	// Host UV paths are not necessarily valid inside the container. Preserve the
+	// package cache through a bind mount, but keep managed Python installations
+	// container-local because host and container platforms may differ.
+	env, uvCacheDir := remapUVRuntimePathsForContainer(env)
 
 	var cmd []string
 	if entry.Runtime == registry.RuntimeDocker {

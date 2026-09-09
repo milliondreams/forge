@@ -45,8 +45,13 @@ func TestHandleSpawnRejectsDependencyPreparationFailure(t *testing.T) {
 		NodeID:    "test-node",
 		Workers:   1,
 		UVXPath:   "uvx",
+		UVPath:    "uv",
+		Python:    "3.13.13",
 		UVVersion: "uvx 1",
-		Run: func(context.Context, string, []string, []string) error {
+		Run: func(_ context.Context, executable string, _ []string, _ []string) error {
+			if executable == "uv" {
+				return nil
+			}
 			return errors.New("package index unavailable")
 		},
 	})

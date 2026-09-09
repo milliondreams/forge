@@ -75,42 +75,9 @@ func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher
 	}
 	normalizeRuntimeSpecIDs(spec, spec.ID)
 
-	specBytes, _ := json.Marshal(spec)
-	managerAPIBaseURL := strings.TrimSpace(os.Getenv("FORGE_MANAGER_API_BASE_URL"))
-	if managerAPIBaseURL == "" {
-		managerAPIBaseURL = "http://127.0.0.1:9090"
-	}
-	managerAPIToken := strings.TrimSpace(os.Getenv("FORGE_MANAGER_API_TOKEN"))
-
-	spawnReq := protocol.SpawnRequest{
-		RequestID: "bootstrap-" + spec.ID,
-		GuildID:   spec.ID,
-		AgentSpec: protocol.AgentSpec{
-			ID:          spec.ID + "#manager_agent",
-			Name:        spec.Name + " Manager",
-			Description: "System agent for guild lifecycle orchestration",
-			ClassName:   GuildManagerClassName,
-			AdditionalTopics: []string{
-				"system_topic",
-				"heartbeat_topic",
-				"guild_status_topic",
-			},
-			ListenToDefaultTopic: boolPtr(false),
-			Properties: map[string]interface{}{
-				"guild_spec":           spec,
-				"manager_api_base_url": managerAPIBaseURL,
-				"organization_id":      orgID,
-				"created_by":           createdBy,
-				"manager_api_token":    managerAPIToken,
-			},
-		},
-		ClientType: "forge",
-		ClientProperties: protocol.JSONB{
-			"guild_spec":           string(specBytes),
-			"manager_api_base_url": managerAPIBaseURL,
-			"organization_id":      orgID,
-			"created_by":           createdBy,
-		},
+	spawnReq, err := BuildGuildManagerSpawnRequest(spec, orgID, createdBy)
+	if err != nil {
+		return err
 	}
 
 	_ = infraPublisher.Emit(ctx, infraevents.EmitParams{
@@ -153,6 +120,49 @@ func EnqueueGuildManagerSpawn(ctx context.Context, pusher protocol.ControlPusher
 	})
 
 	return nil
+}
+
+func BuildGuildManagerSpawnRequest(spec *protocol.GuildSpec, orgID, createdBy string) (protocol.SpawnRequest, error) {
+	if spec == nil || spec.ID == "" {
+		return protocol.SpawnRequest{}, fmt.Errorf("guild spec with id is required")
+	}
+	specBytes, _ := json.Marshal(spec)
+	managerAPIBaseURL := strings.TrimSpace(os.Getenv("FORGE_MANAGER_API_BASE_URL"))
+	if managerAPIBaseURL == "" {
+		managerAPIBaseURL = "http://127.0.0.1:9090"
+	}
+	managerAPIToken := strings.TrimSpace(os.Getenv("FORGE_MANAGER_API_TOKEN"))
+
+	return protocol.SpawnRequest{
+		RequestID: "bootstrap-" + spec.ID,
+		GuildID:   spec.ID,
+		AgentSpec: protocol.AgentSpec{
+			ID:          spec.ID + "#manager_agent",
+			Name:        spec.Name + " Manager",
+			Description: "System agent for guild lifecycle orchestration",
+			ClassName:   GuildManagerClassName,
+			AdditionalTopics: []string{
+				"system_topic",
+				"heartbeat_topic",
+				"guild_status_topic",
+			},
+			ListenToDefaultTopic: boolPtr(false),
+			Properties: map[string]interface{}{
+				"guild_spec":           spec,
+				"manager_api_base_url": managerAPIBaseURL,
+				"organization_id":      orgID,
+				"created_by":           createdBy,
+				"manager_api_token":    managerAPIToken,
+			},
+		},
+		ClientType: "forge",
+		ClientProperties: protocol.JSONB{
+			"guild_spec":           string(specBytes),
+			"manager_api_base_url": managerAPIBaseURL,
+			"organization_id":      orgID,
+			"created_by":           createdBy,
+		},
+	}, nil
 }
 
 func normalizeRuntimeSpecIDs(spec *protocol.GuildSpec, guildID string) {

@@ -24,7 +24,7 @@ func TestForgeCapabilitiesExposeCredentialPreflightFloorOnly(t *testing.T) {
 	if response.Version != "1" {
 		t.Fatalf("version = %q, want 1", response.Version)
 	}
-	want := []string{"launch_requirements_v2", "dependency_profiles_v1", "guild_deletion_v1"}
+	want := []string{"launch_requirements_v2", "dependency_profiles_v1", "launch_preparation_v1", "guild_deletion_v1"}
 	if !reflect.DeepEqual(response.Capabilities, want) {
 		t.Fatalf("capabilities = %#v, want %#v", response.Capabilities, want)
 	}
@@ -39,7 +39,7 @@ func TestForgeCapabilitiesOmitGuildDeletionInHostedMode(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"launch_requirements_v2", "dependency_profiles_v1"}
+	want := []string{"launch_requirements_v2", "dependency_profiles_v1", "launch_preparation_v1"}
 	if !reflect.DeepEqual(response.Capabilities, want) {
 		t.Fatalf("capabilities = %#v, want %#v", response.Capabilities, want)
 	}
