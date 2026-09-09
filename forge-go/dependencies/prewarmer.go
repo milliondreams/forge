@@ -516,9 +516,17 @@ func (c *Coordinator) runtimeEnv() []string {
 		"UV_PYTHON_INSTALL_REGISTRY": "0",
 		"UV_NO_PROGRESS":             "1",
 	}
-	for key, fallback := range values {
-		if os.Getenv(key) == "" {
-			env = append(env, key+"="+fallback)
+	for key, value := range values {
+		prefix := key + "="
+		replaced := false
+		for i := range env {
+			if strings.HasPrefix(env[i], prefix) {
+				env[i] = prefix + value
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, prefix+value)
 		}
 	}
 	return env

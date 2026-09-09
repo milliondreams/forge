@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -259,6 +260,9 @@ func TestPrepareGuildWaitsForEveryStaticAgent(t *testing.T) {
 }
 
 func TestPreparePythonInstallsExactManagedVersionWithPersistentUVPaths(t *testing.T) {
+	t.Setenv("UV_CACHE_DIR", filepath.Join(t.TempDir(), "setup-uv-cache"))
+	t.Setenv("UV_PYTHON_INSTALL_DIR", filepath.Join(t.TempDir(), "setup-uv-python"))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var executable string
@@ -292,6 +296,9 @@ func TestPreparePythonInstallsExactManagedVersionWithPersistentUVPaths(t *testin
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("environment does not contain %q: %s", expected, joined)
 		}
+	}
+	if strings.Contains(joined, "setup-uv-cache") || strings.Contains(joined, "setup-uv-python") {
+		t.Fatalf("environment retains inherited setup-uv paths: %s", joined)
 	}
 }
 
