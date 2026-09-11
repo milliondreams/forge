@@ -19,7 +19,7 @@
     "access": "public"
   },
   "scripts": {
-    "generate": "openapi-generator-cli generate",
+    "generate": "openapi-generator-cli generate && node scripts/patch-generated-client.cjs",
     "clean": "rm -rf dist",
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run clean && npm run build"
