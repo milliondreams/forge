@@ -1,6 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
-from rustic_ai.core.agents.system.models import AgentLaunchRequest
+from rustic_ai.core.agents.system.models import AgentLaunchRequest, ConflictResponse
 from rustic_ai.core.guild import AgentSpec
 from rustic_ai.core.guild.agent_ext.mixins.health import HeartbeatStatus
 from rustic_ai.core.guild.agent_ext.depends.dependency_resolver import DependencySpec
@@ -201,6 +202,54 @@ def test_distinct_agents_can_share_the_same_profile(monkeypatch):
     assert first.id == "reviewer-a"
     assert second.id == "reviewer-b"
     assert first.dependency_map == second.dependency_map
+
+
+def test_dynamic_launch_rejects_a_duplicate_agent_name(monkeypatch):
+    manager = dynamic_manager(monkeypatch)
+    existing = AgentSpec(
+        id="reviewer-a",
+        name="Reviewer",
+        description="Existing reviewer",
+        class_name="example.Agent",
+        properties={},
+    )
+    requested = AgentSpec(
+        id="reviewer-b",
+        name="Reviewer",
+        description="New reviewer",
+        class_name="example.Agent",
+        properties={},
+    )
+    manager.guild = SimpleNamespace(list_agents=lambda: [existing])
+    manager.metastore = Mock()
+    ctx = SimpleNamespace(
+        payload=launch_request(
+            requested,
+            {"llm": {"catalog_key": "models", "selector": "llm_qwen"}},
+        ),
+        send=Mock(),
+    )
+
+    GuildManagerAgent.launch_agent.__wfn__(manager, ctx)
+
+    response = ctx.send.call_args.args[0]
+    assert isinstance(response, ConflictResponse)
+    assert response.error_field == "name"
+    assert response.message == "Agent name already exists: Reviewer"
+    manager.metastore.ensure_agent.assert_not_called()
+
+
+def test_existing_agent_id_is_not_a_name_conflict():
+    existing = AgentSpec(
+        id="reviewer-a",
+        name="Reviewer",
+        description="Existing reviewer",
+        class_name="example.Agent",
+        properties={},
+    )
+    requested = existing.model_copy(deep=True)
+
+    assert GuildManagerAgent._find_agent_name_conflict([existing], requested) is None
 
 
 def test_guild_status_from_health_mapping():

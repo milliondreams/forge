@@ -266,6 +266,18 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
 
         aar = ctx.payload
         agent_spec, profile_keys = self._materialize_dependency_selections(aar)
+        conflicting_agent = self._find_agent_name_conflict(
+            self.guild.list_agents(), agent_spec
+        )
+        if conflicting_agent is not None:
+            ctx.send(
+                ConflictResponse(
+                    error_field="name",
+                    message=f"Agent name already exists: {agent_spec.name}",
+                )
+            )
+            return
+
         ensure_response = self.metastore.ensure_agent(
             self.guild_id, agent_spec, profile_keys
         )
@@ -298,6 +310,20 @@ class GuildManagerAgent(Agent[GuildManagerAgentProps]):
             )
         )
         self._announce_guild_refresh(ctx)
+
+    @staticmethod
+    def _find_agent_name_conflict(
+        existing_agents: List[AgentSpec], requested_agent: AgentSpec
+    ) -> Optional[AgentSpec]:
+        return next(
+            (
+                existing
+                for existing in existing_agents
+                if existing.name == requested_agent.name
+                and existing.id != requested_agent.id
+            ),
+            None,
+        )
 
     def _materialize_dependency_selections(
         self, request: AgentLaunchRequest
